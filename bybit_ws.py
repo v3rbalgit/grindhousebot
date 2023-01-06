@@ -10,7 +10,6 @@ import time
 from uuid import uuid4
 
 from enum import StrEnum
-from typing import Optional
 
 from util import setup_logger
 from handlers import Handler
@@ -48,7 +47,7 @@ class BybitWsClient:
   subscriptions = {}
 
 
-  def __init__(self, *, api_key: Optional[str] = None, secret_key: Optional[str] = None) -> None:
+  def __init__(self, *, api_key: str | None = None, secret_key: str | None = None) -> None:
     """
       Creates an asynchronous Bybit websocket client.
       If `api_key` and `secret_key` are provided, the client will connect via the private domain.
@@ -56,9 +55,9 @@ class BybitWsClient:
 
       Parameters
       ----------
-      `api_key` : Optional[str]
+      `api_key` : str | None
           Bybit account API key
-      `secret_key` : Optional[str]
+      `secret_key` : str | None
           Bybit account secret key
 
     """

@@ -10,7 +10,6 @@ from strategies import RSIStrategy
 from bybit_ws import BybitWsClient
 from util import setup_logger
 import requests.exceptions
-import asyncio
 
 load_dotenv()
 
@@ -19,7 +18,7 @@ class Order(Enum):
   ASCENDING = auto()
   DESCENDING = auto()
 
-
+# TODO: implement other strategies for PriceHandler
 class GrindhouseBot(Client):
   """
     Discord bot that listens to latest position and price data from Bybit account and displays them in Discord channel.
@@ -165,8 +164,7 @@ class GrindhouseBot(Client):
         response += ':thumbsdown: WORST COINS TODAY :thumbsdown: \n\n'
 
     for index in daily_pct_changes.head().index:
-      response += f'**{"+" if daily_pct_changes["pct_change"][index] >= 0 else ""}{daily_pct_changes["pct_change"][index] * 100:.2f}%** {index}\n'
-
+      response += f'**{"+" if daily_pct_changes["pct_change"][index] >= 0 else ""}{daily_pct_changes["pct_change"][index] * 100:.2f}%** {index}\n'  # type: ignore
     await message.channel.send(response)
 
 
