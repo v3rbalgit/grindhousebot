@@ -1,4 +1,4 @@
-from typing import Any, Optional, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias
 from pybit.usdt_perpetual import HTTP
 from discord import Message
 
@@ -95,7 +95,7 @@ class PositionHandler(Handler):
       return self.get_positions()
 
 
-  def build_response(self, position: BybitPosition, action: Optional[str] = None) -> str:
+  def build_response(self, position: BybitPosition, action: str | None = None) -> str:
     """
       Formats a response for sending to a Discord channel.
 
@@ -103,7 +103,7 @@ class PositionHandler(Handler):
       ----------
       `position` : BybitPosition
           Dictionary containing `symbol`, `size`, `side`, `position_value`, `entry_price`, `liq_price`, `stop_loss`, `take_profit`, `mode`
-      `action` : Optional[str]
+      `action` : str | None
           Value of either 'new position', 'position updated', 'position closed' or `None`
 
 
