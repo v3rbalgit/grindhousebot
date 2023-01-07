@@ -5,7 +5,7 @@ from enum import Enum, auto
 from datetime import datetime
 from os import getenv
 from dotenv import load_dotenv
-from handlers import PositionHandler, PriceHandler
+from handlers import PositionHandler, PriceHandler, BybitPosition
 from strategies import RSIStrategy
 from bybit_ws import BybitWsClient
 from util import setup_logger
@@ -105,23 +105,9 @@ class GrindhouseBot(Client):
           await message.channel.send(":question: **UNKNOWN COMMAND** :question:")
 
 
-  def _is_listening(self, topic: str, *, symbols: list[str] | None = None) -> bool:
-    subscriptions_private = self.bybit_ws_client_private.subscriptions.keys()
-    subscriptions_public = self.bybit_ws_client_public.subscriptions.keys()
-
-    if topic == 'positions':
-      return True if 'position' in subscriptions_private else False
-
-    if topic == 'signals':
-      if symbols:
-        return all([True if f"candle.D.{symbol}" in subscriptions_public else False for symbol in symbols])
-
-    raise ValueError(f'Unknown topic: {topic}')
-
-
   async def display_active_positions(self, message: Message):
     try:
-      position_data = self.bybit_client.my_position()  # <-
+      positions = self.bybit_client.my_position()  # <-
       position_handler = PositionHandler(message, self.bybit_client)
 
       timestamp = datetime.utcnow().timestamp() * 1000
@@ -130,11 +116,19 @@ class GrindhouseBot(Client):
         await message.channel.send(f":no_entry: Rate limit of 120 requests per minute reached. Try again in {(self.rate_limit['reset_ms'] - timestamp) / 1000:.3f} seconds. :no_entry:")
         return
 
-      if position_data['ret_msg'] == 'OK':
-        self.rate_limit['status'] = position_data['rate_limit_status']
-        self.rate_limit['reset_ms'] = position_data['rate_limit_reset_ms']
+      if positions['ret_msg'] == 'OK':
+        self.rate_limit['status'] = positions['rate_limit_status']
+        self.rate_limit['reset_ms'] = positions['rate_limit_reset_ms']
 
-        active_positions = [{ key:value for (key, value) in position['data'].items() if key in position_handler.key_list} for position in position_data['result'] if position['data']['size'] != 0]
+        active_positions = [BybitPosition(position['symbol'],
+          position['size'],
+          position['side'],
+          position['position_value'],
+          position['entry_price'],
+          position['liq_price'],
+          position['stop_loss'],
+          position['take_profit'],
+          position['mode']) for position in positions['result'] if position['data']['size'] != 0]
 
         if not active_positions:
           await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
@@ -171,7 +165,6 @@ class GrindhouseBot(Client):
   async def clear_messages(self, message: Message):
     async for msg in message.channel.history(limit=200):
       await msg.delete()
-
 
 
   async def open_position_listener(self, message: Message):
@@ -223,6 +216,17 @@ class GrindhouseBot(Client):
           await self.bybit_ws_client_public.disconnect()
     except ValueError as e:
       self.logger.error(e.args[0])
+
+
+  def _is_listening(self, topic: str, *, symbols: list[str] | None = None) -> bool:
+    if topic == 'positions':
+      return True if 'position' in self.bybit_ws_client_private.subscriptions.keys() else False
+
+    if topic == 'signals':
+      if symbols:
+        return all([True if f"candle.D.{symbol}" in self.bybit_ws_client_public.subscriptions.keys() else False for symbol in symbols])
+
+    raise ValueError(f'Unknown topic: {topic}')
 
 
 intents = Intents.default()

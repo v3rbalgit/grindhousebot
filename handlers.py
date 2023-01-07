@@ -1,17 +1,30 @@
 from typing import Any, Protocol, TypeAlias
+from dataclasses import dataclass
 from pybit.usdt_perpetual import HTTP
 from discord import Message
-
 import numpy as np
 import pandas as pd
-
-from strategies import PriceData, Strategy
+from strategies import PriceData, Signal, Strategy
 import requests.exceptions
 
 
-BybitPosition: TypeAlias = dict[str,Any]
+RawPositionData: TypeAlias = list[dict[str, Any]]
 
-RawData: TypeAlias = list[dict[str, Any]]
+@dataclass
+class BybitPosition:
+  """
+    Represents Bybit position data.
+
+  """
+  symbol: str
+  size: float
+  side: str
+  position_value: float
+  entry_price: float
+  liq_price: float
+  stop_loss: float
+  take_profit: float
+  mode: str
 
 
 class Handler(Protocol):
@@ -49,7 +62,7 @@ class Handler(Protocol):
   def build_response(self, *args, **kwargs) -> str:
     ...
 
-  def handle(self, payload: list[dict[str, Any]], topic: str) -> None:
+  def handle(self, payload: RawPositionData, topic: str) -> None:
     ...
 
 
@@ -74,9 +87,8 @@ class PositionHandler(Handler):
     """
     self.message = message
     self.client = http_client
-    self.key_list = ('symbol', 'size', 'side', 'position_value', 'entry_price', 'liq_price', 'stop_loss', 'take_profit', 'mode')
     self.positions = self.get_positions()
-    self.symbols = [position['symbol'] for position in self.positions]
+    self.symbols = [position.symbol for position in self.positions]
 
 
   def get_positions(self) -> list[BybitPosition]:
@@ -86,11 +98,21 @@ class PositionHandler(Handler):
       Returns
       -------
       list[BybitPosition] :
-          List of dictionaries containing `symbol`, `size`, `side`, `position_value`, `entry_price`, `liq_price`, `stop_loss`, `take_profit`, `mode`
+          List of BybitPosition objects
 
     """
     try:
-      return [{ key:value for (key, value) in position['data'].items() if key in self.key_list} for position in self.client.my_position()['result'] if position['data']['size'] != 0]  # <-
+      return [BybitPosition(
+        position['symbol'],
+        position['size'],
+        position['side'],
+        position['position_value'],
+        position['entry_price'],
+        position['liq_price'],
+        position['stop_loss'],
+        position['take_profit'],
+        position['mode']) for position in self.client.my_position()['result']]  # <-
+
     except requests.exceptions.ConnectionError:  # fix for Docker
       return self.get_positions()
 
@@ -115,21 +137,21 @@ class PositionHandler(Handler):
     """
     try:
       response = ''
-      price = float(self.client.latest_information_for_symbol(symbol=position['symbol'])['result'][0]['last_price'])  # <-
+      price = float(self.client.latest_information_for_symbol(symbol=position.symbol)['result'][0]['last_price'])  # <-
 
-      pnl = (position['entry_price'] * position['size']) - (price * position['size'])
-      pnl = pnl * -1 if position['side'] == 'Buy' else pnl
+      pnl = (position.entry_price * position.size) - (price * position.size)
+      pnl = pnl * -1 if position.side == 'Buy' else pnl
 
-      size = f":moneybag: Size: ${position['position_value']:.2f} ({position['size']} {position['symbol'].replace('USDT','')})\n"
-      entry = f":arrow_right: Entry: ${position['entry_price']}\n"
+      size = f":moneybag: Size: ${position.position_value:.2f} ({position.size} {position.symbol.replace('USDT','')})\n"
+      entry = f":arrow_right: Entry: ${position.entry_price}\n"
       close = f":arrow_left: Close: ${price}\n"
-      take_profit = f":dart: Take profit: ${position['take_profit']}\n" if position['take_profit'] else ''
-      stop_loss = f":flag_white: Stop loss: ${position['stop_loss']}\n" if position['stop_loss'] else ''
-      liq_price = f":skull_crossbones: Liq. price: ${position['liq_price']}"
+      take_profit = f":dart: Take profit: ${position.take_profit}\n" if position.take_profit else ''
+      stop_loss = f":flag_white: Stop loss: ${position.stop_loss}\n" if position.stop_loss else ''
+      liq_price = f":skull_crossbones: Liq. price: ${position.liq_price}"
       pnl_string = f"\n\n:scales: PnL: ${pnl:.2f} {':white_check_mark:' if pnl >= 0 else ':x:'}"
 
       response += f':bangbang: **{action.upper()}** :bangbang:\n\n' if action else ''
-      response += f":chart_with_upwards_trend: LONG {position['symbol']}\n\n" if position['side'] == 'Buy' else f":chart_with_downwards_trend: SHORT {position['symbol']}\n\n"
+      response += f":chart_with_upwards_trend: LONG {position.symbol}\n\n" if position.side == 'Buy' else f":chart_with_downwards_trend: SHORT {position.symbol}\n\n"
 
       match action:
         case 'new position':
@@ -146,14 +168,14 @@ class PositionHandler(Handler):
       return self.build_response(position, action)
 
 
-  async def handle(self, payload: RawData, topic: str) -> None:
+  async def handle(self, payload: RawPositionData, topic: str) -> None:
     """
       Processes incoming websocket data from Bybit with changes in positions
       and sends a response to a Discord channel.
 
       Parameters:
       -----------
-      `payload` : RawData
+      `payload` : RawPositionData
           Dictionary containing raw position data
       `topic` : str
           Topic of the websocket data
@@ -161,56 +183,65 @@ class PositionHandler(Handler):
     """
     response: str = ''
 
-    positions: list[BybitPosition] = [{ key:value for (key, value) in message.items() if key in self.key_list} for message in payload]
+    positions: list[BybitPosition] = [BybitPosition(
+      position['symbol'],
+      position['size'],
+      position['side'],
+      position['position_value'],
+      position['entry_price'],
+      position['liq_price'],
+      position['stop_loss'],
+      position['take_profit'],
+      position['mode']) for position in payload]
 
-    match positions[0].get('mode'):  # Bybit API returns one or two items in list depending on mode
+    match positions[0].mode:  # Bybit API returns one or two items in list depending on mode
       case 'MergedSingle':
         position = positions[0]
 
-        if position['symbol'] not in self.symbols and position['side'] != 'None':
+        if position.symbol not in self.symbols and position.side != 'None':
           self.positions.append(position)
-          self.symbols.append(position['symbol'])
+          self.symbols.append(position.symbol)
           response = self.build_response(position, 'new position')
           await self.message.channel.send(response)
           return
 
-        index = next((i for (i, p) in enumerate(self.positions) if p['symbol'] == position['symbol']), None)
+        index = next((i for (i, p) in enumerate(self.positions) if p.symbol == position.symbol), None)
 
         if index is not None:  # index can have value 0
-          if position['side'] == 'None':
+          if position.side == 'None':
             self.symbols.pop(index)
             response = self.build_response(self.positions.pop(index), 'position closed')
             await self.message.channel.send(response)
             return
 
-          if all((position.get(k) == v for k, v in self.positions[index].items())): return  # check if any relevant data actually changed
+          if position == self.positions[index]: return  # check if any relevant data actually changed
 
           self.positions[index] = position
           response = self.build_response(position, 'position updated')
           await self.message.channel.send(response)
 
       case 'BothSide':
-        if positions[0]['symbol'] not in self.symbols:
-          position = positions[0] if positions[0].get('size') != 0 else positions[1] if positions[1].get('size') != 0 else None
+        if positions[0].symbol not in self.symbols:
+          position = positions[0] if positions[0].size != 0 else positions[1] if positions[1].size != 0 else None
           if position:
             self.positions.append(position)
-            self.symbols.append(position['symbol'])
+            self.symbols.append(position.symbol)
             response = self.build_response(position, 'new position')
             await self.message.channel.send(response)
 
 
-        index = next((i for (i, p) in enumerate(self.positions) if p['symbol'] == positions[0]['symbol']), None)
+        index = next((i for (i, p) in enumerate(self.positions) if p.symbol == positions[0].symbol), None)
 
         if index is not None:  # index can have value 0
-          position = list(filter(lambda p: p.get('side') == self.positions[index].get('side'), positions))[0]
+          position = list(filter(lambda p: p.side == self.positions[index].side, positions))[0]
 
-          if position['size'] == 0:
+          if position.size == 0:
             self.symbols.pop(index)
             response = self.build_response(self.positions.pop(index), 'position closed')
             await self.message.channel.send(response)
             return
 
-          if all((position.get(k) == v for k, v in self.positions[index].items())): return  # check if any relevant data actually changed
+          if position == self.positions[index]: return  # check if any relevant data actually changed
 
           self.positions[index] = position
           response = self.build_response(position, 'position updated')
@@ -246,7 +277,7 @@ class PriceHandler(Handler):
     self.running_intervals = {}  # keeps track of price data within current time interval
     self.signals = {}  # updates with relevant signals
     self.current_timestamp = 0
-    self.current_interval = int((10 ** 6) * 60 * self.strategy.interval)  # convert interval (in minutes) to nanoseconds (Bybit timestamp format)
+    self.current_interval = (10 ** 6) * 60 * self.strategy.interval  # convert interval (in minutes) to nanoseconds (Bybit timestamp format)
 
 
   def get_symbols(self) -> list[str]:
@@ -271,7 +302,7 @@ class PriceHandler(Handler):
       return self.get_symbols()
 
 
-  def build_response(self, *, symbol: str, signal: dict[str, Any]) -> str:
+  def build_response(self, *, symbol: str, signal: Signal) -> str:
     """
       Formats a response for sending to a Discord channel.
 
@@ -279,7 +310,7 @@ class PriceHandler(Handler):
       ----------
       `symbol` : str
           Symbol name corresponding to the signal
-      `signal` : dict[str, Any]
+      `signal` : Signal
           Signal data for the last interval
 
 
@@ -289,23 +320,23 @@ class PriceHandler(Handler):
           Formatted response
 
     """
-    if signal['type'] == 'sell':
-      return f':chart_with_upwards_trend: **{symbol} IS PUMPING** (RSI: {signal["value"]:.2f}) :chart_with_upwards_trend:'
+    if signal.type == 'sell':
+      return f':chart_with_upwards_trend: **{symbol} IS PUMPING** (RSI: {signal.value:.2f}) :chart_with_upwards_trend:'
 
-    if signal['type'] == 'buy':
-      return f':chart_with_downwards_trend: **{symbol} IS DUMPING** (RSI: {signal["value"]:.2f}) :chart_with_downwards_trend:'
+    if signal.type == 'buy':
+      return f':chart_with_downwards_trend: **{symbol} IS DUMPING** (RSI: {signal.value:.2f}) :chart_with_downwards_trend:'
 
     return ''
 
 
-  async def handle(self, payload: RawData, topic: str) -> None:
+  async def handle(self, payload: RawPositionData, topic: str) -> None:
     """
       Processes real-time price data of a given symbol
       and sends a response to a Discord channel.
 
       Parameters
       ----------
-      `payload` : RawData
+      `payload` : RawPositionData
           Dictionary containing current price data of the subscribed symbol and interval
       `topic` : str
           Topic of the websocket data. Contains symbol name and subscribed interval, e.g. 'candle.D.BTCUSDT'

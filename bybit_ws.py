@@ -1,16 +1,11 @@
-from __future__ import annotations
 import asyncio
-
 import websockets.client as ws
 import websockets.exceptions as ws_exc
-
 import hmac
 import json
 import time
 from uuid import uuid4
-
 from enum import StrEnum
-
 from util import setup_logger
 from handlers import Handler
 
@@ -135,26 +130,6 @@ class BybitWsClient:
       self._logger.info(f'Disconnected from {self.url}')
 
 
-  async def _prepare_sub(self, action: str, topics: list[str]) -> None:
-    if self.websocket.closed:
-      await self.connect()
-
-    if self._stream_task:
-      self._stream_task.cancel()
-
-      try:
-        await self._stream_task
-
-      except asyncio.CancelledError:
-        self._stream_task = None
-
-    await self.websocket.send(json.dumps({ 'op': action, 'args': topics }))
-    response = await self.websocket.recv()
-
-    if json.loads(response).get('success') is False:
-      raise ValueError(f'{action.capitalize()} failed: {json.loads(response).get("ret_msg")}')
-
-
   async def subscribe(self, topics: str | list[str], handler: Handler) -> None:
     """
       Subscribes to topics on the Bybit API and fires the `handle` method on handler on every message.
@@ -243,6 +218,26 @@ class BybitWsClient:
     self.subscriptions.clear()
     for resub in resub_list:
       await self.subscribe(resub['topics'], resub['handler'])
+
+
+  async def _prepare_sub(self, action: str, topics: list[str]) -> None:
+    if self.websocket.closed:
+      await self.connect()
+
+    if self._stream_task:
+      self._stream_task.cancel()
+
+      try:
+        await self._stream_task
+
+      except asyncio.CancelledError:
+        self._stream_task = None
+
+    await self.websocket.send(json.dumps({ 'op': action, 'args': topics }))
+    response = await self.websocket.recv()
+
+    if json.loads(response).get('success') is False:
+      raise ValueError(f'{action.capitalize()} failed: {json.loads(response).get("ret_msg")}')
 
 
   async def _stream(self) -> None:

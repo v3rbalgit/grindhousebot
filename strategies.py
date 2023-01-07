@@ -1,14 +1,14 @@
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias
-
+from dataclasses import dataclass
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
 
-Dataframes: TypeAlias = dict[str,pd.DataFrame]
-Signal: TypeAlias = dict[str, str | float]
 
-@dataclass
+Dataframes: TypeAlias = dict[str,pd.DataFrame]
+
+@dataclass(slots=True)
 class PriceData:
   """
     Represents price data of a symbol.
@@ -19,6 +19,16 @@ class PriceData:
   high: float
   low: float
   timestamp: int
+
+
+@dataclass(slots=True)
+class Signal:
+  """
+    Represents signal data of a symbol.
+
+  """
+  type: str
+  value: float
 
 
 class Strategy(Protocol):
@@ -155,7 +165,7 @@ class RSIStrategy(Strategy):
       Returns
       -------
       dict[str, Signal]
-          Dictionary of signals corresponding to the relevant symbol, e.g. { 'BTCUSDT': { 'type': 'buy', 'value': 13.421 } }
+          Dictionary of signals corresponding to the relevant symbol, e.g. { 'BTCUSDT': Signal('buy', 13.421), ... }
 
     """
     signals = {}
@@ -168,15 +178,9 @@ class RSIStrategy(Strategy):
         rsi = prices['RSI_14'].iloc[-1]
 
         if rsi > self.sell and rsi != 100:
-           signals[symbol] = {
-            'type': 'sell',
-            'value': rsi
-          }
+           signals[symbol] = Signal('sell', rsi)
 
         if rsi < self.buy and rsi != 0:
-           signals[symbol] = {
-            'type': 'buy',
-            'value': rsi
-          }
+           signals[symbol] = Signal('buy', rsi)
 
     return signals
