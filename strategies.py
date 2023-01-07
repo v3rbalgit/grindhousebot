@@ -44,6 +44,10 @@ class Strategy(Protocol):
         Time interval to group price data by (in minutes)
     `window` : int
         Maximum amount of intervals to store in memory
+    `buy` : int
+        Buy signal threshold value
+    `sell` : int
+        Sell signal threshold value
 
     Methods
     -------
@@ -56,15 +60,8 @@ class Strategy(Protocol):
   dataframes: Dataframes = {}
   interval: int
   window: int
-
-
-  def __init__(self, /, interval: int, window: int) -> None:
-    """
-      Strategy class is not meant to be directly created, but inherited.
-
-    """
-    self.interval = interval
-    self.window = window
+  buy: int
+  sell : int
 
 
   def watch(self, prices: dict[str, PriceData]) -> dict[str, Signal]:
@@ -132,11 +129,13 @@ class RSIStrategy(Strategy):
         Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol
 
   """
-  sell: int
+  interval: int
+  window: int
   buy: int
+  sell: int
 
 
-  def __init__(self, *, sell: int = 85, buy: int = 15, interval: int = 5, window: int = 20) -> None:
+  def __init__(self, /, interval: int = 5, window: int = 20, buy: int = 15, sell: int = 85) -> None:
     """
       RSIStrategy objects provide buy/sell signals based on the Relative Strength Index.
 
@@ -152,9 +151,10 @@ class RSIStrategy(Strategy):
           Maximum amount of intervals to store in memory
 
     """
-    self.sell = sell if sell > buy else buy
-    self.buy = buy if buy < sell else sell
-    super().__init__(interval, window)
+    self.interval = interval
+    self.window = window
+    self.buy = buy if buy < sell else sell - 1
+    self.sell = sell if sell > buy else buy + 1
 
 
   def process(self) -> dict[str, Signal]:

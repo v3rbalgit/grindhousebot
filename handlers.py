@@ -51,14 +51,6 @@ class Handler(Protocol):
   message: Message
   client: HTTP
 
-  def __init__(self, message: Message, http_client: HTTP) -> None:
-    """
-      Handler class is not meant to be directly created, but inherited.
-
-    """
-    self.message = message
-    self.client = http_client
-
   def build_response(self, *args, **kwargs) -> str:
     ...
 
@@ -124,7 +116,7 @@ class PositionHandler(Handler):
       Parameters
       ----------
       `position` : BybitPosition
-          Dictionary containing `symbol`, `size`, `side`, `position_value`, `entry_price`, `liq_price`, `stop_loss`, `take_profit`, `mode`
+          BybitPosition object containing all relevant position data
       `action` : str | None
           Value of either 'new position', 'position updated', 'position closed' or `None`
 
