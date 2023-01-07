@@ -108,7 +108,7 @@ class GrindhouseBot(Client):
       await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
       return
 
-    tasks = [asyncio.create_task(message.channel.send(position_handler.build_response(position))) for position in self.position_handler.positions]
+    tasks = [asyncio.create_task(message.channel.send(position_handler.build_response(position))) for position in position_handler.positions]
     asyncio.gather(*tasks)
 
 
