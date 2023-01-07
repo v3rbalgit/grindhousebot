@@ -57,7 +57,6 @@ class BybitWsClient:
 
     """
     self._credentials = {}
-    self._authenticated = False
 
     if api_key and secret_key:
       self.domain = Domain.PRIVATE
@@ -92,9 +91,8 @@ class BybitWsClient:
           json.dumps({ 'op': 'auth', 'args': [self._credentials['api_key'], expires, signature]})
         )
         response = await self.websocket.recv()
-        self._authenticated = json.loads(response).get('success')
 
-        self._logger.info('Successfully authenticated') if self._authenticated else self._logger.warning('Authentication failed!')
+        self._logger.info('Successfully authenticated') if json.loads(response).get('success') else self._logger.warning('Authentication failed!')
 
       if len(self.subscriptions.keys()):
         await self._resubscribe()
