@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias
-from dataclasses import dataclass
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
