@@ -104,7 +104,7 @@ class PositionHandler(Handler):
         position['liq_price'],
         position['stop_loss'],
         position['take_profit'],
-        position['mode']) for position in self.client.my_position()['result']]  # <-
+        position['mode']) for position in self.client.my_position()['result'] if position['data']['size'] != 0]  # <-
 
     except requests.exceptions.ConnectionError:  # fix for Docker
       return self.get_positions()

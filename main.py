@@ -36,11 +36,6 @@ class GrindhouseBot(Client):
     api_secret=getenv('secret_key')
   )
 
-  rate_limit = {
-    'status': 120,
-    'reset_ms': datetime.utcnow().timestamp() * 1000
-    }
-
   logger = setup_logger(__name__)
 
 
@@ -108,42 +103,22 @@ class GrindhouseBot(Client):
 
   async def display_active_positions(self, message: Message):
     try:
-      positions = self.bybit_client.my_position()  # <-
-      position_handler = PositionHandler(message, self.bybit_client)
+      if not hasattr(bot, 'position_handler'):
+        self.position_handler = PositionHandler(message, self.bybit_client)
 
-      timestamp = datetime.utcnow().timestamp() * 1000
-
-      if timestamp < self.rate_limit['reset_ms'] and self.rate_limit['status'] == 0:
-        await message.channel.send(f":no_entry: Rate limit of 120 requests per minute reached. Try again in {(self.rate_limit['reset_ms'] - timestamp) / 1000:.3f} seconds. :no_entry:")
+      if not self.position_handler.positions:
+        await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
         return
 
-      if positions['ret_msg'] == 'OK':
-        self.rate_limit['status'] = positions['rate_limit_status']
-        self.rate_limit['reset_ms'] = positions['rate_limit_reset_ms']
-
-        active_positions = [BybitPosition(position['symbol'],
-          position['size'],
-          position['side'],
-          position['position_value'],
-          position['entry_price'],
-          position['liq_price'],
-          position['stop_loss'],
-          position['take_profit'],
-          position['mode']) for position in positions['result'] if position['data']['size'] != 0]
-
-        if not active_positions:
-          await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
-          return
-
-        tasks = [asyncio.create_task(message.channel.send(position_handler.build_response(position))) for position in active_positions]
-        asyncio.gather(*tasks)
+      tasks = [asyncio.create_task(message.channel.send(self.position_handler.build_response(position))) for position in self.position_handler.positions]
+      asyncio.gather(*tasks)
 
     except requests.exceptions.ConnectionError:  # fix for Docker
       await self.display_active_positions(message)
 
 
   async def display_top_coins(self, message: Message, *, order: Order):
-    if not len(self.price_handler.daily_pct_changes.keys()):
+    if not hasattr(bot, 'price_handler'):
       await message.channel.send(':warning: **LISTEN TO SIGNALS FIRST** :warning:')
       return
 
@@ -170,7 +145,8 @@ class GrindhouseBot(Client):
 
 
   async def open_position_listener(self, message: Message):
-    self.position_handler = PositionHandler(message, self.bybit_client)
+    if not hasattr(bot, 'position_handler'):
+      self.position_handler = PositionHandler(message, self.bybit_client)
 
     try:
       if self._is_listening('positions'):
@@ -195,7 +171,8 @@ class GrindhouseBot(Client):
 
 
   async def open_signal_listener(self, message: Message):
-    self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60))  # change interval to desired value
+    if not hasattr(bot, 'price_handler'):
+      self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60, buy=20, sell=80))  # change interval to desired value
 
     try:
       if self._is_listening('signals', symbols=self.price_handler.symbols):
