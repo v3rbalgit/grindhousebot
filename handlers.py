@@ -221,7 +221,6 @@ class PositionHandler(Handler):
             response = self.build_response(position, 'new position')
             await self.message.channel.send(response)
 
-
         index = next((i for (i, p) in enumerate(self.positions) if p.symbol == positions[0].symbol), None)
 
         if index is not None:  # index can have value 0

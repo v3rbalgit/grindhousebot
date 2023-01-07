@@ -129,11 +129,6 @@ class RSIStrategy(Strategy):
         Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol
 
   """
-  interval: int
-  window: int
-  buy: int
-  sell: int
-
 
   def __init__(self, /, interval: int = 5, window: int = 20, buy: int = 15, sell: int = 85) -> None:
     """

@@ -213,7 +213,6 @@ class BybitWsClient:
       prev_key = cur_key
       i += 1
 
-    self.subscriptions.clear()
     for resub in resub_list:
       await self.subscribe(resub['topics'], resub['handler'])
 
