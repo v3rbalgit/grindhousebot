@@ -102,19 +102,14 @@ class GrindhouseBot(Client):
 
 
   async def display_active_positions(self, message: Message):
-    try:
-      if not hasattr(bot, 'position_handler'):
-        self.position_handler = PositionHandler(message, self.bybit_client)
+    position_handler = PositionHandler(message, self.bybit_client)
 
-      if not self.position_handler.positions:
-        await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
-        return
+    if not position_handler.positions:
+      await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
+      return
 
-      tasks = [asyncio.create_task(message.channel.send(self.position_handler.build_response(position))) for position in self.position_handler.positions]
-      asyncio.gather(*tasks)
-
-    except requests.exceptions.ConnectionError:  # fix for Docker
-      await self.display_active_positions(message)
+    tasks = [asyncio.create_task(message.channel.send(position_handler.build_response(position))) for position in self.position_handler.positions]
+    asyncio.gather(*tasks)
 
 
   async def display_top_coins(self, message: Message, *, order: Order):
@@ -147,8 +142,7 @@ class GrindhouseBot(Client):
 
 
   async def open_position_listener(self, message: Message):
-    if not hasattr(bot, 'position_handler'):
-      self.position_handler = PositionHandler(message, self.bybit_client)
+    self.position_handler = PositionHandler(message, self.bybit_client)
 
     try:
       if self._is_listening('positions'):
@@ -161,6 +155,8 @@ class GrindhouseBot(Client):
 
 
   async def close_position_listener(self, message: Message):
+    if not hasattr(bot, 'position_handler'): return
+
     try:
       if self._is_listening('positions'):
         await message.channel.send(':grey_exclamation: **LISTENING STOPPED** :grey_exclamation:')
@@ -173,8 +169,7 @@ class GrindhouseBot(Client):
 
 
   async def open_signal_listener(self, message: Message):
-    if not hasattr(bot, 'price_handler'):
-      self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60, buy=20, sell=80))  # change interval to desired value
+    self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60, buy=20, sell=80))  # change interval to desired value
 
     try:
       if self._is_listening('signals', symbols=self.price_handler.symbols):
@@ -187,6 +182,8 @@ class GrindhouseBot(Client):
 
 
   async def close_signal_listener(self, message: Message):
+    if not hasattr(bot, 'price_handler'): return
+
     try:
       if self._is_listening('signals', symbols=self.price_handler.symbols):
         self.price_handler.daily_pct_changes.clear()
