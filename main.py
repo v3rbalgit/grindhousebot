@@ -141,6 +141,8 @@ class GrindhouseBot(Client):
 
   async def clear_messages(self, message: Message):
     async for msg in message.channel.history(limit=200):
+      if msg.pinned:
+        continue
       await msg.delete()
 
 
