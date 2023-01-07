@@ -2,10 +2,11 @@ from typing import Any, Protocol, TypeAlias
 from dataclasses import dataclass
 from pybit.usdt_perpetual import HTTP
 from discord import Message
+import requests.exceptions
+import asyncio
 import numpy as np
 import pandas as pd
 from strategies import PriceData, Signal, Strategy
-import requests.exceptions
 
 
 RawPositionData: TypeAlias = list[dict[str, Any]]
@@ -64,7 +65,7 @@ class PositionHandler(Handler):
 
   """
 
-  def __init__(self, message: Message, http_client: HTTP) -> None:
+  def __init__(self, /, message: Message, http_client: HTTP) -> None:
     """
       PositionHandler objects contain `handle` method for processing real-time position data from Bybit account
       and `build_response` method for displaying them in a Discord channel.
@@ -173,9 +174,9 @@ class PositionHandler(Handler):
           Topic of the websocket data
 
     """
-    response: str = ''
+    response = ''
 
-    positions: list[BybitPosition] = [BybitPosition(
+    positions = [BybitPosition(
       position['symbol'],
       position['size'],
       position['side'],
@@ -245,7 +246,7 @@ class PriceHandler(Handler):
 
   """
 
-  def __init__(self, message: Message, http_client: HTTP, *, strategy: Strategy):
+  def __init__(self, /, message: Message, http_client: HTTP, *, strategy: Strategy):
     """
       PriceHandler objects contain `handle` method to process real-time price data of symbols traded via the USDT perpetual contract on Bybit
       in order to generate buy/sell signals and `build_response` method to display them in a Discord channel.
@@ -283,12 +284,8 @@ class PriceHandler(Handler):
     """
     try:
       response: dict[str, Any] = self.client.query_symbol()  # <-
-      symbols: list[str] = []
+      return [result['name'] for result in response['result'] if result['name'].endswith('USDT')]
 
-      if response.get('result'):
-        symbols.extend([result['name'] for result in response['result'] if result['name'].endswith('USDT')])
-
-      return symbols
     except requests.exceptions.ConnectionError:  # fix for Docker
       return self.get_symbols()
 
@@ -333,15 +330,16 @@ class PriceHandler(Handler):
           Topic of the websocket data. Contains symbol name and subscribed interval, e.g. 'candle.D.BTCUSDT'
 
     """
-    response: str = ''
-    symbol: str = topic.split('.')[-1]
-    data: dict[str, Any] = payload[0]
+    response = ''
+    tasks = []
+    symbol = topic.split('.')[-1]
+    data = payload[0]
 
     daily = pd.Series([data['open'], data['close']], dtype=np.float64)
     daily_log_returns = np.log(1 + daily.pct_change())
     self.daily_pct_changes[symbol] = daily_log_returns.iloc[-1]  # type: ignore
 
-    if self.current_timestamp == 0:
+    if not self.current_timestamp:
       self.current_timestamp = data['timestamp']
 
     if not self.running_intervals.get(symbol):
@@ -363,7 +361,10 @@ class PriceHandler(Handler):
       if signals.get(symbol) is not None and self.signals.get(symbol) is None:
         self.signals[symbol] = signals[symbol]
         response = self.build_response(symbol=symbol, signal=signals[symbol])
-        await self.message.channel.send(response)
+        tasks.append(asyncio.create_task(self.message.channel.send(response)))
 
     self.current_timestamp += self.current_interval
     self.running_intervals.clear()
+
+    if tasks:
+      asyncio.gather(*tasks)

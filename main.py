@@ -1,5 +1,6 @@
 from discord import Client, Message, Intents
 from pybit.usdt_perpetual import HTTP
+import asyncio
 import pandas as pd
 from enum import Enum, auto
 from datetime import datetime
@@ -134,8 +135,9 @@ class GrindhouseBot(Client):
           await message.channel.send(":no_entry_sign: **NO OPEN POSITIONS** :no_entry_sign:")
           return
 
-        for position in active_positions:
-          await message.channel.send(position_handler.build_response(position))
+        tasks = [asyncio.create_task(message.channel.send(position_handler.build_response(position))) for position in active_positions]
+        asyncio.gather(*tasks)
+
     except requests.exceptions.ConnectionError:  # fix for Docker
       await self.display_active_positions(message)
 
