@@ -141,9 +141,6 @@ class BybitWsClient:
           Handler object to call `handle` method on every message in the subscribed topics
 
     """
-    if isinstance(topics, str):
-      topics = [topics]
-
     await self._prepare_sub('subscribe', topics)
 
     for topic in topics:
@@ -165,9 +162,6 @@ class BybitWsClient:
           Topic or list of topics to unsubscribe from (found in the Bybit API documentation)
 
     """
-    if isinstance(topics, str):
-      topics = [topics]
-
     await self._prepare_sub('unsubscribe', topics)
 
     for topic in topics:
@@ -217,7 +211,10 @@ class BybitWsClient:
       await self.subscribe(resub['topics'], resub['handler'])
 
 
-  async def _prepare_sub(self, action: str, topics: list[str]) -> None:
+  async def _prepare_sub(self, action: str, topics: str | list[str]) -> None:
+    if isinstance(topics, str):
+      topics = [topics]
+
     if self.websocket.closed:
       await self.connect()
 
