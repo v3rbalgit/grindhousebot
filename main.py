@@ -3,14 +3,12 @@ from pybit.usdt_perpetual import HTTP
 import asyncio
 import pandas as pd
 from enum import Enum, auto
-from datetime import datetime
 from os import getenv
 from dotenv import load_dotenv
-from handlers import PositionHandler, PriceHandler, BybitPosition
+from handlers import PositionHandler, PriceHandler
 from strategies import RSIStrategy
 from bybit_ws import BybitWsClient
 from util import setup_logger
-import requests.exceptions
 
 load_dotenv()
 
@@ -27,8 +25,8 @@ class GrindhouseBot(Client):
   """
   bybit_ws_client_private: BybitWsClient
   bybit_ws_client_public: BybitWsClient
-  position_handler: PositionHandler
-  price_handler: PriceHandler
+  position_handler: PositionHandler | None = None
+  price_handler: PriceHandler | None = None
 
   bybit_client = HTTP(
     endpoint=getenv('url'),
@@ -88,9 +86,9 @@ class GrindhouseBot(Client):
 
           match message_list[1]:
             case 'winners':
-              await self.display_top_coins(message, order=Order.ASCENDING)
-            case 'losers':
               await self.display_top_coins(message, order=Order.DESCENDING)
+            case 'losers':
+              await self.display_top_coins(message, order=Order.ASCENDING)
             case _:
               await message.channel.send(":question: **UNKNOWN ARGUMENT** :question:")
 
@@ -113,7 +111,7 @@ class GrindhouseBot(Client):
 
 
   async def display_top_coins(self, message: Message, *, order: Order):
-    if not hasattr(bot, 'price_handler'):
+    if not self.price_handler:
       await message.channel.send(':warning: **LISTEN TO SIGNALS FIRST** :warning:')
       return
 
@@ -122,10 +120,10 @@ class GrindhouseBot(Client):
     daily_pct_changes = pd.DataFrame(self.price_handler.daily_pct_changes, index=['pct_change']).T
 
     match order:
-      case Order.ASCENDING:
+      case Order.DESCENDING:
         daily_pct_changes.sort_values(by=['pct_change'], inplace=True, ascending=False)
         response += ':thumbsup: BEST COINS TODAY :thumbsup:\n\n'
-      case Order.DESCENDING:
+      case Order.ASCENDING:
         daily_pct_changes.sort_values(by=['pct_change'], inplace=True)
         response += ':thumbsdown: WORST COINS TODAY :thumbsdown: \n\n'
 
@@ -136,8 +134,7 @@ class GrindhouseBot(Client):
 
   async def clear_messages(self, message: Message):
     async for msg in message.channel.history(limit=200):
-      if msg.pinned:
-        continue
+      if msg.pinned: continue
       await msg.delete()
 
 
@@ -155,7 +152,7 @@ class GrindhouseBot(Client):
 
 
   async def close_position_listener(self, message: Message):
-    if not hasattr(bot, 'position_handler'): return
+    if not self.position_handler: return
 
     try:
       if self._is_listening('positions'):
@@ -164,12 +161,13 @@ class GrindhouseBot(Client):
 
         if not len(self.bybit_ws_client_private.subscriptions):
           await self.bybit_ws_client_private.disconnect()
+          self.position_handler = None
     except ValueError as e:
       self.logger.error(e.args[0])
 
 
   async def open_signal_listener(self, message: Message):
-    self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60, buy=20, sell=80))  # change interval to desired value
+    self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60, buy=20, sell=80))
 
     try:
       if self._is_listening('signals', symbols=self.price_handler.symbols):
@@ -182,7 +180,7 @@ class GrindhouseBot(Client):
 
 
   async def close_signal_listener(self, message: Message):
-    if not hasattr(bot, 'price_handler'): return
+    if not self.price_handler: return
 
     try:
       if self._is_listening('signals', symbols=self.price_handler.symbols):
@@ -192,6 +190,8 @@ class GrindhouseBot(Client):
 
         if not len(self.bybit_ws_client_public.subscriptions):
           await self.bybit_ws_client_public.disconnect()
+          self.price_handler = None
+
     except ValueError as e:
       self.logger.error(e.args[0])
 
