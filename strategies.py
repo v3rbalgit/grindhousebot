@@ -3,6 +3,7 @@ from typing import Protocol, TypeAlias
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+from sqlalchemy.engine import Engine
 
 
 Dataframes: TypeAlias = dict[str,pd.DataFrame]
@@ -51,10 +52,10 @@ class Strategy(Protocol):
 
     Methods
     -------
-    watch(prices: dict[str, PriceData])
+    watch(prices: dict[str, PriceData], engine: Engine | None)
         Transforms PriceData objects representing price data corresponding to a symbol into dictionary of signals corresponding to a symbol
     process()
-        Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol.
+        Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol
 
   """
   dataframes: Dataframes = {}
@@ -64,14 +65,17 @@ class Strategy(Protocol):
   sell : int
 
 
-  def watch(self, prices: dict[str, PriceData]) -> dict[str, Signal]:
+  def watch(self, prices: dict[str, PriceData], engine: Engine | None) -> dict[str, Signal]:
     """
       Takes in final price data of all symbols in given interval, adds them into a dataframe, processes the dataframe and returns dictionary of signals corresponding to relevant symbols.
+      If engine
 
       Parameters
       ----------
       `prices` : dict[str, PriceData]
           Dictionary of final price data of all symbols in an interval, e.g. { 'BTCUSDT': PriceData(open, high, low, close, timestamp), ... }
+      `engine` : Engine | None
+          If SQL Alchemy database engine is provided, data will be saved to external database for offline analysis
 
       Returns
       -------
@@ -95,6 +99,10 @@ class Strategy(Protocol):
 
           self.dataframes[symbol] = pd.concat([self.dataframes[symbol], pd.DataFrame({'open': price.open, 'high': price.high, 'low': price.low, 'close': price.close}, index=[price.timestamp])])
 
+    if engine is not None:
+      for symbol in prices:
+        self.dataframes[symbol].iloc[-1].to_sql(symbol, engine, if_exists='append')
+
     return self.process()
 
 
@@ -114,19 +122,7 @@ class Strategy(Protocol):
 
 class RSIStrategy(Strategy):
   """
-    Class for signalling buy/sell RSI values based on price data.
-
-    Attributes
-    ----------
-    `sell` : int
-        Defines a top signal to sell
-    `buy` : int
-        Defines a bottom signal to buy
-
-    Methods
-    -------
-    process()
-        Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol
+    Class for calculating RSI values based on price data and generating buy/sell signals.
 
   """
 
@@ -154,7 +150,7 @@ class RSIStrategy(Strategy):
 
   def process(self) -> dict[str, Signal]:
     """
-      Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol.
+      Processes dataframe of running price data and returns dictionary of buy/sell signals for each relevant symbol.
 
       Returns
       -------

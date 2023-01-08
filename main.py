@@ -147,6 +147,7 @@ class GrindhouseBot(Client):
 
       await message.channel.send(':exclamation: **LISTENING FOR POSITION CHANGES** :exclamation:')
       await self.bybit_ws_client_private.subscribe('position', self.position_handler)
+
     except ValueError as e:
       self.logger.error(e.args[0])
 
@@ -162,12 +163,13 @@ class GrindhouseBot(Client):
         if not len(self.bybit_ws_client_private.subscriptions):
           await self.bybit_ws_client_private.disconnect()
           self.position_handler = None
+
     except ValueError as e:
       self.logger.error(e.args[0])
 
 
   async def open_signal_listener(self, message: Message):
-    self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60, buy=20, sell=80))
+    self.price_handler = PriceHandler(message, self.bybit_client, strategy=RSIStrategy(interval=60), save_to_db=True)
 
     try:
       if self._is_listening('signals', symbols=self.price_handler.symbols):
@@ -175,6 +177,7 @@ class GrindhouseBot(Client):
 
       await message.channel.send(':exclamation: **LISTENING FOR PRICE SIGNALS** :exclamation:')
       await self.bybit_ws_client_public.subscribe([f'candle.D.{symbol}' for symbol in self.price_handler.symbols], self.price_handler)
+
     except ValueError as e:
       self.logger.error(e.args[0])
 

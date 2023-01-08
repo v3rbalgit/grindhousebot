@@ -6,6 +6,7 @@ import requests.exceptions
 import asyncio
 import numpy as np
 import pandas as pd
+from sqlalchemy import create_engine
 from strategies import PriceData, Signal, Strategy
 
 
@@ -246,7 +247,7 @@ class PriceHandler(Handler):
 
   """
 
-  def __init__(self, /, message: Message, http_client: HTTP, *, strategy: Strategy):
+  def __init__(self, /, message: Message, http_client: HTTP, *, strategy: Strategy, save_to_db: bool = False):
     """
       PriceHandler objects contain `handle` method to process real-time price data of symbols traded via the USDT perpetual contract on Bybit
       in order to generate buy/sell signals and `build_response` method to display them in a Discord channel.
@@ -259,6 +260,8 @@ class PriceHandler(Handler):
           Bybit HTTP client used for querying inital data
       `strategy` : Strategy
           Strategy used to form buying or selling signals based on realtime prices
+      `db` : bool
+          Save incoming real-time data to SQLite DB
 
     """
     self.message = message
@@ -270,6 +273,7 @@ class PriceHandler(Handler):
     self.signals = {}  # updates with relevant signals
     self.current_timestamp = 0
     self.current_interval = (10 ** 6) * 60 * self.strategy.interval  # convert interval (in minutes) to nanoseconds (Bybit timestamp format)
+    self.db_engine = create_engine("sqlite:///DATA.db") if save_to_db else None
 
 
   def get_symbols(self) -> list[str]:
@@ -290,7 +294,7 @@ class PriceHandler(Handler):
       return self.get_symbols()
 
 
-  def build_response(self, *, symbol: str, signal: Signal) -> str:
+  def build_response(self, /, symbol: str, signal: Signal) -> str:
     """
       Formats a response for sending to a Discord channel.
 
@@ -352,7 +356,7 @@ class PriceHandler(Handler):
       self.running_intervals[symbol].low = data['close'] if data['close'] < self.running_intervals[symbol].low else self.running_intervals[symbol].low
       return
 
-    signals = self.strategy.watch(self.running_intervals)
+    signals = self.strategy.watch(self.running_intervals, self.db_engine)
 
     for symbol in self.symbols:
       if signals.get(symbol) is None and self.signals.get(symbol) is not None:
@@ -360,7 +364,7 @@ class PriceHandler(Handler):
 
       if signals.get(symbol) is not None and self.signals.get(symbol) is None:
         self.signals[symbol] = signals[symbol]
-        response = self.build_response(symbol=symbol, signal=signals[symbol])
+        response = self.build_response(symbol, signals[symbol])
         tasks.append(asyncio.create_task(self.message.channel.send(response)))
 
     self.current_timestamp += self.current_interval
