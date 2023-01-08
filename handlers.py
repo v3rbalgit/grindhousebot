@@ -9,7 +9,7 @@ import pandas as pd
 from strategies import PriceData, Signal, Strategy
 
 
-RawPositionData: TypeAlias = list[dict[str, Any]]
+RawData: TypeAlias = list[dict[str, Any]]
 
 @dataclass
 class BybitPosition:
@@ -55,7 +55,7 @@ class Handler(Protocol):
   def build_response(self, *args, **kwargs) -> str:
     ...
 
-  def handle(self, payload: RawPositionData, topic: str) -> None:
+  def handle(self, payload: RawData, topic: str) -> None:
     ...
 
 
@@ -161,14 +161,14 @@ class PositionHandler(Handler):
       return self.build_response(position, action)
 
 
-  async def handle(self, payload: RawPositionData, topic: str) -> None:
+  async def handle(self, payload: RawData, topic: str) -> None:
     """
       Processes incoming websocket data from Bybit with changes in positions
       and sends a response to a Discord channel.
 
       Parameters:
       -----------
-      `payload` : RawPositionData
+      `payload` : RawData
           Dictionary containing raw position data
       `topic` : str
           Topic of the websocket data
@@ -317,14 +317,14 @@ class PriceHandler(Handler):
     return ''
 
 
-  async def handle(self, payload: RawPositionData, topic: str) -> None:
+  async def handle(self, payload: RawData, topic: str) -> None:
     """
       Processes real-time price data of a given symbol
       and sends a response to a Discord channel.
 
       Parameters
       ----------
-      `payload` : RawPositionData
+      `payload` : RawData
           Dictionary containing current price data of the subscribed symbol and interval
       `topic` : str
           Topic of the websocket data. Contains symbol name and subscribed interval, e.g. 'candle.D.BTCUSDT'
