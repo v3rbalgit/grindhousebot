@@ -268,9 +268,9 @@ class PriceHandler(Handler):
     self.client = http_client
     self.symbols = self.get_symbols()
     self.strategy = strategy
-    self.daily_pct_changes = {}  # f.e. { 'BTCUSDT': -0.01254,... }
-    self.running_intervals = {}  # keeps track of price data within current time interval
-    self.signals = {}  # updates with relevant signals
+    self.daily_pct_changes: dict[str, float] = {}  # f.e. { 'BTCUSDT': -0.01254,... }
+    self.running_intervals: dict[str, PriceData] = {}
+    self.signals: dict[str, Signal] = {}
     self.current_timestamp = 0
     self.current_interval = (10 ** 6) * 60 * self.strategy.interval  # convert interval (in minutes) to nanoseconds (Bybit timestamp format)
     self.db_engine = create_engine("sqlite:///DATA.db") if save_to_db else None
@@ -313,10 +313,10 @@ class PriceHandler(Handler):
 
     """
     if signal.type == 'sell':
-      return f':chart_with_upwards_trend: **{symbol} IS PUMPING** (RSI: {signal.value:.2f}) :chart_with_upwards_trend:'
+      return f':chart_with_upwards_trend: **{symbol} IS PUMPING** ({signal.name.upper()}: {signal.value.upper() if isinstance(signal.value, str) else signal.value:.2f}) :chart_with_upwards_trend:'
 
     if signal.type == 'buy':
-      return f':chart_with_downwards_trend: **{symbol} IS DUMPING** (RSI: {signal.value:.2f}) :chart_with_downwards_trend:'
+      return f':chart_with_downwards_trend: **{symbol} IS DUMPING** ({signal.name.upper()}: {signal.value.upper() if isinstance(signal.value, str) else signal.value:.2f}) :chart_with_downwards_trend:'
 
     return ''
 
@@ -356,19 +356,24 @@ class PriceHandler(Handler):
       self.running_intervals[symbol].low = data['close'] if data['close'] < self.running_intervals[symbol].low else self.running_intervals[symbol].low
       return
 
-    signals = self.strategy.watch(self.running_intervals, self.db_engine)
+    if self.db_engine:
+      for symbol, price in self.running_intervals.items():
+        df = pd.DataFrame({'open': price.open, 'high': price.high, 'low': price.low, 'close': price.close}, index=[price.timestamp], dtype=np.float64)
+        df.to_sql(symbol, self.db_engine, if_exists='append')
+
+    signals = self.strategy.generate_signals(self.running_intervals)
+
+    self.current_timestamp += self.current_interval
+    self.running_intervals.clear()
 
     for symbol in self.symbols:
       if signals.get(symbol) is None and self.signals.get(symbol) is not None:
-        self.signals[symbol] = None
+        del self.signals[symbol]
 
       if signals.get(symbol) is not None and self.signals.get(symbol) is None:
         self.signals[symbol] = signals[symbol]
         response = self.build_response(symbol, signals[symbol])
         tasks.append(asyncio.create_task(self.message.channel.send(response)))
-
-    self.current_timestamp += self.current_interval
-    self.running_intervals.clear()
 
     if tasks:
       asyncio.gather(*tasks)

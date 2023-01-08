@@ -27,8 +27,9 @@ class Signal:
     Represents signal data of a symbol.
 
   """
+  name: str
   type: str
-  value: float
+  value: float | str
 
 
 class Strategy(Protocol):
@@ -45,14 +46,10 @@ class Strategy(Protocol):
         Time interval to group price data by (in minutes)
     `window` : int
         Maximum amount of intervals to store in memory
-    `buy` : int
-        Buy signal threshold value
-    `sell` : int
-        Sell signal threshold value
 
     Methods
     -------
-    watch(prices: dict[str, PriceData], engine: Engine | None)
+    generate_signals(prices: dict[str, PriceData])
         Transforms PriceData objects representing price data corresponding to a symbol into dictionary of signals corresponding to a symbol
     process()
         Processes dataframe of running price data and returns dictionary of buy/sell signals for each symbol
@@ -61,11 +58,9 @@ class Strategy(Protocol):
   dataframes: Dataframes = {}
   interval: int
   window: int
-  buy: int
-  sell : int
 
 
-  def watch(self, prices: dict[str, PriceData], engine: Engine | None) -> dict[str, Signal]:
+  def generate_signals(self, /, prices: dict[str, PriceData]) -> dict[str, Signal]:
     """
       Takes in final price data of all symbols in given interval, adds them into a dataframe, processes the dataframe and returns dictionary of signals corresponding to relevant symbols.
       If engine
@@ -74,8 +69,6 @@ class Strategy(Protocol):
       ----------
       `prices` : dict[str, PriceData]
           Dictionary of final price data of all symbols in an interval, e.g. { 'BTCUSDT': PriceData(open, high, low, close, timestamp), ... }
-      `engine` : Engine | None
-          If SQL Alchemy database engine is provided, data will be saved to external database for offline analysis
 
       Returns
       -------
@@ -98,10 +91,6 @@ class Strategy(Protocol):
             continue
 
           self.dataframes[symbol] = pd.concat([self.dataframes[symbol], pd.DataFrame({'open': price.open, 'high': price.high, 'low': price.low, 'close': price.close}, index=[price.timestamp])])
-
-    if engine is not None:
-      for symbol in prices:
-        self.dataframes[symbol].iloc[-1].to_sql(symbol, engine, if_exists='append')
 
     return self.process()
 
@@ -155,7 +144,7 @@ class RSIStrategy(Strategy):
       Returns
       -------
       dict[str, Signal]
-          Dictionary of signals corresponding to the relevant symbol, e.g. { 'BTCUSDT': Signal('buy', 13.421), ... }
+          Dictionary of signals corresponding to the relevant symbol, e.g. { 'BTCUSDT': Signal('rsi', 'buy', 13.421), ... }
 
     """
     signals = {}
@@ -168,9 +157,62 @@ class RSIStrategy(Strategy):
         rsi = prices['RSI_14'].iloc[-1]
 
         if rsi > self.sell and rsi != 100:
-           signals[symbol] = Signal('sell', rsi)
+           signals[symbol] = Signal('rsi', 'sell', rsi)
 
         if rsi < self.buy and rsi != 0:
-           signals[symbol] = Signal('buy', rsi)
+           signals[symbol] = Signal('rsi', 'buy', rsi)
+
+    return signals
+
+
+class MACDStrategy(Strategy):
+  """
+    Class for calculating MACD buy/sell signals based on price data.
+
+  """
+
+  def __init__(self, /, interval: int = 5, window: int = 30) -> None:
+    """
+      MACDStrategy objects provide buy/sell signals based on the Moving Average Convergence/Divergence indicator.
+
+      Parameters
+      ----------
+      `interval` : int
+          Time interval to group price data by (in minutes)
+      `window` : int
+          Maximum amount of intervals to store in memory
+
+    """
+    self.interval = interval
+    self.window = window
+
+
+  def process(self) -> dict[str, Signal]:
+    """
+      Processes dataframe of running price data and returns dictionary of buy/sell signals for each relevant symbol.
+
+      Returns
+      -------
+      dict[str, Signal]
+          Dictionary of signals corresponding to the relevant symbol, e.g. { 'BTCUSDT': Signal('macd', 'buy', 'bullish crossover'), ... }
+
+    """
+    signals = {}
+
+    for symbol, prices in self.dataframes.items():
+      prices.ta.macd(close='close', fast=12, slow=26, signal=9, append=True)
+
+      if 'MACDh_12_26_9' in prices.columns:
+        not_nan = prices['MACDh_12_26_9'].notnull()
+
+        if not_nan.iloc[-2] and not_nan.iloc[-1]:
+          prev_macd = prices['MACDh_12_26_9'].iloc[-2]
+          cur_macd = prices['MACDh_12_26_9'].iloc[-1]
+
+          if cur_macd > 0 and prev_macd < 0:
+            signals[symbol] = Signal('macd', 'buy', 'bullish crossover')
+
+          if cur_macd < 0 and prev_macd > 0:
+            signals[symbol] = Signal('macd', 'sell', 'bearish crossover')
 
     return signals

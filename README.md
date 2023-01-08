@@ -20,10 +20,13 @@ The bot responds to the following commands:
 - **!clear** - clears the last 200 messages in Discord channel
 
 ## How does the bot come up with price signals?
-After the bot has been started, the live websocket price data from Bybit is filtered and stored in-memory in a *pandas dataframe*. When it fills up with sufficient data to calculate the RSI values, it will display the coins whose values are above or below certain thresholds. By providing arguments to the `RSIStrategy` constructor you can set what timeframes you want the RSI calculation to be based upon (`interval` - default 60 minutes), the number of intervals to store in-memory (`window` - default 20), the sell signal threshold (`sell` - default 85) and the buy signal threshold (`buy` - default 15). 
+After the bot has been started, the live websocket price data from Bybit is filtered and stored in-memory in a *pandas dataframe*. When it fills up with sufficient data to calculate the RSI values, it will display the coins whose values are above or below certain thresholds. By providing arguments to the `Strategy` constructor you can set what timeframes you want the signal calculation to be based upon (`interval` - default 5 minutes) and the number of intervals to store in-memory (`window` - default 20).
 
 ## Are there other strategies? Can the bot change strategies on the fly?
-There is currently no way to swap strategies on the fly, and there is so far only one strategy - the `RSIStrategy` to provide signals. I have ideas about other strategies, but you are free to help out. I structured the code so it should be simple to get started, and the signals are generated using `pandas_ta` library, so it should be relatively simple to implement and most of the code is documented ;)
+There is currently no way to swap strategies on the fly, and there are so for only two strategies to provide signals - the `RSIStrategy` and `MACDStrategy`. I have ideas about other strategies, but you are free to help out. I structured the code so it should be simple to get started, and the signals are generated using `pandas_ta` library, so it should be relatively simple to implement and most of the code is documented ;)
+
+## Can the bot save the incoming price data?
+Yes! By setting the `save_to_db` attribute of the `PriceHandler` object to `True`, the bot will save all incoming price data within each interval to SQLite DB file called *DATA.db* which will be created in the root directory. Separate tables will be created for each symbol. This allows you to externally analyze incoming price data on the fly.
 
 ## I found a bug, can you help me?
 As a self-thought programmer, I cannot guarantee that the code will work 100%. This is a hobby project. I tried my best, but bugs happen and I'm always learning. Raise an issue in this repository or even better, contribute to the code.
