@@ -97,15 +97,15 @@ class PositionHandler(Handler):
     """
     try:
       return [BybitPosition(
-        position['symbol'],
-        position['size'],
-        position['side'],
-        position['position_value'],
-        position['entry_price'],
-        position['liq_price'],
-        position['stop_loss'],
-        position['take_profit'],
-        position['mode']) for position in self.client.my_position()['result'] if position['data']['size'] != 0]  # <-
+        position['data']['symbol'],
+        position['data']['size'],
+        position['data']['side'],
+        position['data']['position_value'],
+        position['data']['entry_price'],
+        position['data']['liq_price'],
+        position['data']['stop_loss'],
+        position['data']['take_profit'],
+        position['data']['mode']) for position in self.client.my_position()['result'] if position['data']['size'] != 0]  # <-
 
     except requests.exceptions.ConnectionError:  # fix for Docker
       return self.get_positions()
