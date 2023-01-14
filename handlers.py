@@ -1,7 +1,9 @@
+from __future__ import annotations
 from typing import Any, Protocol, TypeAlias
 from dataclasses import dataclass
 from pybit.usdt_perpetual import HTTP
 from discord import Message
+from copy import deepcopy
 import requests.exceptions
 import asyncio
 import numpy as np
@@ -12,7 +14,7 @@ from strategies import PriceData, Signal, Strategy
 
 RawData: TypeAlias = list[dict[str, Any]]
 
-@dataclass
+@dataclass(eq=False)
 class BybitPosition:
   """
     Represents Bybit position data.
@@ -27,6 +29,18 @@ class BybitPosition:
   stop_loss: float
   take_profit: float
   mode: str
+
+  def __eq__(self, other: BybitPosition) -> bool:
+    if isinstance(other, BybitPosition):
+      return all((self.symbol == other.symbol,
+        self.side == other.side,
+        self.entry_price == other.entry_price,
+        self.size == other.size,
+        self.position_value == other.position_value,
+        self.mode == other.mode,
+        self.stop_loss == other.stop_loss,
+        self.take_profit == other.take_profit))
+    return False
 
 
 class Handler(Protocol):
@@ -152,8 +166,10 @@ class PositionHandler(Handler):
           response += size + entry + take_profit + stop_loss + liq_price
         case 'position updated':
           response += size + entry + take_profit + stop_loss + liq_price
+        case 'position reduced':
+          response += size + entry + close + take_profit + stop_loss + liq_price + pnl_string
         case 'position closed':
-          response += entry + close + pnl_string
+          response += size + entry + close + pnl_string
         case _:
           response += size + entry + take_profit + stop_loss + liq_price + pnl_string
 
@@ -202,17 +218,7 @@ class PositionHandler(Handler):
         index = next((i for (i, p) in enumerate(self.positions) if p.symbol == position.symbol), None)
 
         if index is not None:  # index can have value 0
-          if position.side == 'None':
-            self.symbols.pop(index)
-            response = self.build_response(self.positions.pop(index), 'position closed')
-            await self.message.channel.send(response)
-            return
-
-          if position == self.positions[index]: return  # check if any relevant data actually changed
-
-          self.positions[index] = position
-          response = self.build_response(position, 'position updated')
-          await self.message.channel.send(response)
+          asyncio.create_task(self._evaluate_position(position, index))
 
       case 'BothSide':
         if positions[0].symbol not in self.symbols:
@@ -227,18 +233,30 @@ class PositionHandler(Handler):
 
         if index is not None:  # index can have value 0
           position = list(filter(lambda p: p.side == self.positions[index].side, positions))[0]
+          asyncio.create_task(self._evaluate_position(position, index))
 
-          if position.size == 0:
-            self.symbols.pop(index)
-            response = self.build_response(self.positions.pop(index), 'position closed')
-            await self.message.channel.send(response)
-            return
 
-          if position == self.positions[index]: return  # check if any relevant data actually changed
+  async def _evaluate_position(self, position: BybitPosition, index: int):
+    if position.size == 0:
+      self.symbols.pop(index)
+      response = self.build_response(self.positions.pop(index), 'position closed')
+      await self.message.channel.send(response)
+      return
 
-          self.positions[index] = position
-          response = self.build_response(position, 'position updated')
-          await self.message.channel.send(response)
+    if position.size < self.positions[index].size:
+      pos_copy = deepcopy(position)
+      pos_copy.size = self.positions[index].size - position.size
+      response = self.build_response(pos_copy, 'position reduced')
+      self.positions[index] = position
+      await self.message.channel.send(response)
+      return
+
+    if position == self.positions[index]: return  # filter funding pnl
+
+    self.positions[index] = position
+    response = self.build_response(position, 'position updated')
+    await self.message.channel.send(response)
+
 
 
 class PriceHandler(Handler):
@@ -335,7 +353,6 @@ class PriceHandler(Handler):
 
     """
     response = ''
-    tasks = []
     symbol = topic.split('.')[-1]
     data = payload[0]
 
@@ -356,6 +373,8 @@ class PriceHandler(Handler):
       self.running_intervals[symbol].low = data['close'] if data['close'] < self.running_intervals[symbol].low else self.running_intervals[symbol].low
       return
 
+    self.current_timestamp += self.current_interval
+
     if self.db_engine:
       for symbol, price in self.running_intervals.items():
         df = pd.DataFrame({'open': price.open, 'high': price.high, 'low': price.low, 'close': price.close}, index=[price.timestamp], dtype=np.float64)
@@ -363,7 +382,6 @@ class PriceHandler(Handler):
 
     signals = self.strategy.generate_signals(self.running_intervals)
 
-    self.current_timestamp += self.current_interval
     self.running_intervals.clear()
 
     for symbol in self.symbols:
@@ -373,7 +391,4 @@ class PriceHandler(Handler):
       if signals.get(symbol) is not None and self.signals.get(symbol) is None:
         self.signals[symbol] = signals[symbol]
         response = self.build_response(symbol, signals[symbol])
-        tasks.append(asyncio.create_task(self.message.channel.send(response)))
-
-    if tasks:
-      asyncio.gather(*tasks)
+        asyncio.create_task(self.message.channel.send(response))

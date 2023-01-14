@@ -37,9 +37,6 @@ class BybitWsClient:
   """
 
   websocket: ws.WebSocketClientProtocol
-  domain = Domain.PUBLIC
-  url = ''
-  subscriptions = {}
 
 
   def __init__(self, *, api_key: str | None = None, secret_key: str | None = None) -> None:
@@ -57,6 +54,8 @@ class BybitWsClient:
 
     """
     self._credentials = {}
+    self.subscriptions = {}
+    self.domain = Domain.PUBLIC
 
     if api_key and secret_key:
       self.domain = Domain.PRIVATE
@@ -199,8 +198,8 @@ class BybitWsClient:
         continue
 
       cur_key: str = list(self.subscriptions.keys())[i]
-      if id(self.subscriptions[prev_key]) == id(self.subscriptions[cur_key]):
-        resubs['topics'] += [cur_key]
+      if self.subscriptions[prev_key] is self.subscriptions[cur_key]:
+        resubs['topics'].append(cur_key)
         prev_key = cur_key
         i += 1
         continue
@@ -243,7 +242,7 @@ class BybitWsClient:
         payload = json.loads(message)
 
         if self.subscriptions.get(payload.get('topic')):
-          await self.subscriptions[payload['topic']].handle(payload['data'], payload['topic'])  # call handler's handle method on every message
+          asyncio.create_task(self.subscriptions[payload['topic']].handle(payload['data'], payload['topic']))  # type: ignore
 
     except ws_exc.ConnectionClosedError:
       self._logger.error(f'Disconnected from {self.url}. Retrying in 5 seconds...')

@@ -93,7 +93,10 @@ class GrindhouseBot(Client):
               await message.channel.send(":question: **UNKNOWN ARGUMENT** :question:")
 
         case '!clear':
-          await self.clear_messages(message)
+          if len(message_list) == 1:
+            return await message.channel.send(":warning: **MISSING COUNT** :warning:")
+
+          await self.clear_messages(message, message_list[1])
 
         case _:
           await message.channel.send(":question: **UNKNOWN COMMAND** :question:")
@@ -132,8 +135,14 @@ class GrindhouseBot(Client):
     await message.channel.send(response)
 
 
-  async def clear_messages(self, message: Message):
-    async for msg in message.channel.history(limit=200):
+  async def clear_messages(self, message: Message, count: str):
+    if not count.isnumeric():
+      return await message.channel.send(':question: **COUNT MUST BE A NUMBER** :question:')
+
+    if int(count) < 0:
+      return await message.channel.send(':question: **COUNT MUST BE POSITIVE** :question:')
+
+    async for msg in message.channel.history(limit=int(count)):
       if msg.pinned: continue
       await msg.delete()
 
