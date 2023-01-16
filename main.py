@@ -6,7 +6,7 @@ from enum import Enum, auto
 from os import getenv
 from dotenv import load_dotenv
 from handlers import PositionHandler, PriceHandler
-from strategies import RSIStrategy
+from strategies import RSIStrategy, MACDStrategy, Strategy
 from bybit_ws import BybitWsClient
 from util import setup_logger
 
@@ -92,6 +92,18 @@ class GrindhouseBot(Client):
             case _:
               await message.channel.send(":question: **UNKNOWN ARGUMENT** :question:")
 
+        case 'strategy':
+          if len(message_list) == 1:
+            return await message.channel.send(":warning: **MISSING ARGUMENT** :warning:")
+
+          match message_list[1]:
+            case 'rsi':
+              await self.change_signal_strategy(message, strategy=RSIStrategy(interval=60))
+            case 'macd':
+              await self.change_signal_strategy(message, strategy=MACDStrategy(interval=60))
+            case _:
+              await message.channel.send(":question: **UNKNOWN ARGUMENT** :question:")
+
         case '!clear':
           if len(message_list) == 1:
             return await message.channel.send(":warning: **MISSING COUNT** :warning:")
@@ -133,6 +145,15 @@ class GrindhouseBot(Client):
     for index in daily_pct_changes.head().index:
       response += f'**{"+" if daily_pct_changes["pct_change"][index] >= 0 else ""}{daily_pct_changes["pct_change"][index] * 100:.2f}%** {index}\n'  # type: ignore
     await message.channel.send(response)
+
+
+  async def change_signal_strategy(self, message: Message, strategy: Strategy):
+    if not self.price_handler:
+      await message.channel.send(':warning: **LISTEN TO SIGNALS FIRST** :warning:')
+      return
+
+    self.price_handler.strategy = strategy
+    await message.channel.send(':exclamation: **STRATEGY CHANGED** :exclamation:')
 
 
   async def clear_messages(self, message: Message, count: str):
@@ -210,11 +231,13 @@ class GrindhouseBot(Client):
 
   def _is_listening(self, topic: str, *, symbols: list[str] | None = None) -> bool:
     if topic == 'positions':
-      return True if 'position' in self.bybit_ws_client_private.subscriptions.keys() else False
+      index = next((i for (i, s) in enumerate(self.bybit_ws_client_private.subscriptions) if 'position' in s['topics']), None)
+      return True if index is not None else False
 
     if topic == 'signals':
       if symbols:
-        return all([True if f"candle.D.{symbol}" in self.bybit_ws_client_public.subscriptions.keys() else False for symbol in symbols])
+        index = next((i for (i, s) in enumerate(self.bybit_ws_client_public.subscriptions) if set([f"candle.D.{symbol}" for symbol in symbols]) == s['topics']), None)
+        return True if index is not None else False
 
     raise ValueError(f'Unknown topic: {topic}')
 

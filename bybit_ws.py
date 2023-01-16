@@ -27,12 +27,6 @@ class BybitWsClient:
     ----------
     `websocket` : ws.WebSocketClientProtocol
         websockets instance representing Websocket connection
-    `domain` : Domain
-        Domain of the connection (private/public)
-    `url` : str
-        URL used for connecting to bybit
-    `subscriptions` : dict[list[str], Callable]
-        Keeps track of subscribed topics and their corresponding callback functions
 
   """
 
@@ -54,7 +48,7 @@ class BybitWsClient:
 
     """
     self._credentials = {}
-    self.subscriptions = {}
+    self.subscriptions = []
     self.domain = Domain.PUBLIC
 
     if api_key and secret_key:
@@ -93,7 +87,7 @@ class BybitWsClient:
 
         self._logger.info('Successfully authenticated') if json.loads(response).get('success') else self._logger.warning('Authentication failed!')
 
-      if len(self.subscriptions.keys()):
+      if self.subscriptions:
         await self._resubscribe()
 
     except ws_exc.InvalidURI:
@@ -145,8 +139,10 @@ class BybitWsClient:
 
     await self._prepare_sub('subscribe', topics)
 
-    for topic in topics:
-      self.subscriptions[topic] = handler
+    self.subscriptions.append({
+      'topics': topics,
+      'handler': handler
+    })
 
     self._logger.info(f'Subscribed to {",".join(topics)}')
 
@@ -169,51 +165,24 @@ class BybitWsClient:
 
     await self._prepare_sub('unsubscribe', topics)
 
-    for topic in topics:
-      if self.subscriptions.get(topic):
-        del self.subscriptions[topic]
+    for i, sub in enumerate(self.subscriptions):
+      if set(sub['topics']) == set(topics):
+        self.subscriptions.pop(i)
 
     self._logger.info(f'Unsubscribed from {",".join(topics)}')
 
-    if len(self.subscriptions):
+    if self.subscriptions:
       self._stream_task = asyncio.create_task(self._stream())
-      await self._stream_task
+      asyncio.gather(self._stream_task)
 
 
   async def _resubscribe(self) -> None:
-    resub_list = []
-    resubs = {
-      'topics': [],
-      'handler': None
-    }
+    tasks = []
 
-    i = 0
-    prev_key: str = list(self.subscriptions.keys())[i]
+    for sub in self.subscriptions:
+      tasks.append(self.subscribe(sub['topics'], sub['handler']))
 
-    while i < len(self.subscriptions.keys()):
-      if i == 0:
-        resubs['topics'] += [prev_key]
-        resubs['handler'] = self.subscriptions[prev_key]
-        i += 1
-        continue
-
-      cur_key: str = list(self.subscriptions.keys())[i]
-      if self.subscriptions[prev_key] is self.subscriptions[cur_key]:
-        resubs['topics'].append(cur_key)
-        prev_key = cur_key
-        i += 1
-        continue
-
-      resub_list.append(resubs)
-      resubs = {
-        'topics': [cur_key],
-        'handler': self.subscriptions[cur_key]
-      }
-      prev_key = cur_key
-      i += 1
-
-    for resub in resub_list:
-      await self.subscribe(resub['topics'], resub['handler'])
+    asyncio.gather(*tasks)
 
 
   async def _prepare_sub(self, action: str, topics: str | list[str]) -> None:
@@ -241,11 +210,11 @@ class BybitWsClient:
       async for message in self.websocket:
         payload = json.loads(message)
 
-        if self.subscriptions.get(payload.get('topic')):
-          asyncio.create_task(self.subscriptions[payload['topic']].handle(payload['data'], payload['topic']))  # type: ignore
+        index = next((i for (i, s) in enumerate(self.subscriptions) if payload.get('topic') in s['topics']), None)
+
+        if index is not None:
+          asyncio.create_task(self.subscriptions[index]['handler'].handle(payload['data'], payload['topic']))
 
     except ws_exc.ConnectionClosedError:
-      self._logger.error(f'Disconnected from {self.url}. Retrying in 5 seconds...')
-
-      await asyncio.sleep(5.0)
+      self._logger.error(f'Disconnected from {self.url}. Retrying...')
       await self.connect()

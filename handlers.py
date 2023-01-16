@@ -218,7 +218,7 @@ class PositionHandler(Handler):
         index = next((i for (i, p) in enumerate(self.positions) if p.symbol == position.symbol), None)
 
         if index is not None:  # index can have value 0
-          asyncio.create_task(self._evaluate_position(position, index))
+          await self._evaluate_position(position, index)
 
       case 'BothSide':
         if positions[0].symbol not in self.symbols:
@@ -233,7 +233,7 @@ class PositionHandler(Handler):
 
         if index is not None:  # index can have value 0
           position = list(filter(lambda p: p.side == self.positions[index].side, positions))[0]
-          asyncio.create_task(self._evaluate_position(position, index))
+          await self._evaluate_position(position, index)
 
 
   async def _evaluate_position(self, position: BybitPosition, index: int):
@@ -256,7 +256,6 @@ class PositionHandler(Handler):
     self.positions[index] = position
     response = self.build_response(position, 'position updated')
     await self.message.channel.send(response)
-
 
 
 class PriceHandler(Handler):
@@ -285,13 +284,22 @@ class PriceHandler(Handler):
     self.message = message
     self.client = http_client
     self.symbols = self.get_symbols()
-    self.strategy = strategy
-    self.daily_pct_changes: dict[str, float] = {}  # f.e. { 'BTCUSDT': -0.01254,... }
+    self._strategy = strategy
+    self.daily_pct_changes: dict[str, float] = {}
     self.running_intervals: dict[str, PriceData] = {}
     self.signals: dict[str, Signal] = {}
     self.current_timestamp = 0
-    self.current_interval = (10 ** 6) * 60 * self.strategy.interval  # convert interval (in minutes) to nanoseconds (Bybit timestamp format)
+    self.current_interval = (10 ** 6) * 60 * self._strategy.interval  # convert interval (in minutes) to nanoseconds (Bybit timestamp format)
     self.db_engine = create_engine("sqlite:///DATA.db") if save_to_db else None
+
+  @property
+  def strategy(self) -> Strategy:
+    return self._strategy
+
+  @strategy.setter
+  def strategy(self, strat: Strategy):
+    strat.dataframes = self._strategy.dataframes.copy()
+    self._strategy = strat
 
 
   def get_symbols(self) -> list[str]:
