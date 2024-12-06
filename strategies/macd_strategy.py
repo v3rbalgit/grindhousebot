@@ -40,17 +40,26 @@ class MACDStrategy(SignalStrategy):
             Tuple of (MACD line, Signal line, Histogram) if successful, None otherwise
         """
         try:
-            # Calculate MACD
-            macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
-            if macd is None:
+            # Calculate MACD efficiently
+            close = df['close']
+            macd = ta.macd(close, fast=12, slow=26, signal=9)
+            if macd is None or macd.empty:
                 return None
 
-            # Get latest values
-            macd_line = float(macd['MACD_12_26_9'].iloc[-1])
-            signal_line = float(macd['MACDs_12_26_9'].iloc[-1])
-            histogram = float(macd['MACDh_12_26_9'].iloc[-1])
+            try:
+                # Use iat for efficient single value access
+                macd_line = float(macd['MACD_12_26_9'].iat[-1])
+                signal_line = float(macd['MACDs_12_26_9'].iat[-1])
+                histogram = float(macd['MACDh_12_26_9'].iat[-1])
 
-            return macd_line, signal_line, histogram
+                # Store histogram for pattern detection
+                df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+
+                return macd_line, signal_line, histogram
+
+            except (IndexError, KeyError) as e:
+                logger.error(f"Error accessing MACD values: {e}")
+                return None
 
         except Exception as e:
             logger.error(f"Error calculating MACD: {e}")
@@ -69,7 +78,13 @@ class MACDStrategy(SignalStrategy):
         """
         try:
             macd_line, signal_line, histogram = macd_values
-            prev_histogram = float(df['MACDh_12_26_9'].iloc[-2])
+
+            # Get previous histogram value efficiently
+            try:
+                prev_histogram = float(df['MACDh_12_26_9'].iat[-2])
+            except (IndexError, KeyError) as e:
+                logger.error(f"Error accessing previous histogram: {e}")
+                return None
 
             # Calculate market trend
             trend = self.calculate_market_trend(df)
@@ -77,8 +92,10 @@ class MACDStrategy(SignalStrategy):
             # Detect patterns
             patterns = self.detect_patterns(df)
 
-            # Volume confirmation
-            volume_confirmed = df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]
+            # Volume confirmation (optimized)
+            volume = df['volume']
+            volume_ma = volume.rolling(window=20).mean()
+            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
 
             # Generate signals with multiple confirmations
             signal = None
@@ -98,9 +115,10 @@ class MACDStrategy(SignalStrategy):
                     if volume_confirmed:
                         confidence += 0.1
 
-                    # MACD strength confirmation
-                    macd_strength = abs(macd_line - signal_line) / signal_line
-                    confidence += min(macd_strength * 0.2, 0.2)
+                    # MACD strength confirmation (with safety check)
+                    if signal_line != 0:
+                        macd_strength = abs(macd_line - signal_line) / abs(signal_line)
+                        confidence += min(macd_strength * 0.2, 0.2)
 
                     if confidence > 0.7:  # High confidence threshold
                         signal = Signal(
@@ -123,9 +141,10 @@ class MACDStrategy(SignalStrategy):
                     if volume_confirmed:
                         confidence += 0.1
 
-                    # MACD strength confirmation
-                    macd_strength = abs(macd_line - signal_line) / signal_line
-                    confidence += min(macd_strength * 0.2, 0.2)
+                    # MACD strength confirmation (with safety check)
+                    if signal_line != 0:
+                        macd_strength = abs(macd_line - signal_line) / abs(signal_line)
+                        confidence += min(macd_strength * 0.2, 0.2)
 
                     if confidence > 0.7:  # High confidence threshold
                         signal = Signal(

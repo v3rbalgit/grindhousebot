@@ -1,17 +1,11 @@
-from discord import Message
+from discord import Message, TextChannel
 from typing import Optional, List
-from enum import Enum, auto
 
-from price_handler import PriceHandler
+from handlers.price_handler import PriceHandler
 from clients import BybitClient, BybitWsClient, OpenRouterClient
 from utils.models import StrategyType
 from utils.logger import logger
-from utils.constants import DEFAULT_INTERVAL
-
-
-class Order(Enum):
-    ASCENDING = auto()
-    DESCENDING = auto()
+from utils.constants import DEFAULT_INTERVAL, validate_interval, VALID_INTERVALS
 
 
 class CommandHandler:
@@ -28,7 +22,84 @@ class CommandHandler:
         self.bybit_client = bybit_client
         self.bybit_ws_client = bybit_ws_client
         self.price_handler: Optional[PriceHandler] = None
-        self.chat_client = OpenRouterClient()
+        self.chat_client = OpenRouterClient()  # Used for both chat and signal analysis
+        self.current_interval = DEFAULT_INTERVAL
+
+    async def handle_interval(self, message: Message, args: str) -> None:
+        """
+        Handle interval command.
+
+        Args:
+            message: Discord message
+            args: New interval value
+        """
+        if not args:
+            # Show current interval and available options
+            valid_intervals = ', '.join(sorted(VALID_INTERVALS, key=lambda x: int(x) if x.isdigit() else float('inf')))
+            await message.channel.send(
+                f"📊 **Current Interval: {self.current_interval}**\n\n"
+                f"To change interval, use: `!interval <value>`\n"
+                f"Valid intervals: {valid_intervals}"
+            )
+            return
+
+        try:
+            # Validate new interval
+            new_interval = validate_interval(args)
+            if new_interval == self.current_interval:
+                await message.channel.send("🔄 Already using this interval")
+                return
+
+            # If price handler is active, we need to reinitialize
+            if self.price_handler:
+                # Store current strategies
+                current_strategies = self.price_handler.active_strategies
+
+                # Unsubscribe from current topics if WebSocket is active
+                if self.bybit_ws_client is not None:
+                    symbols = await self.bybit_client.get_usdt_instruments()
+                    old_topics = [f'kline.{self.current_interval}.{symbol}' for symbol in symbols]
+                    await self.bybit_ws_client.unsubscribe(old_topics)
+
+                # Cleanup current price handler
+                await self.price_handler.cleanup()
+
+                # Update interval
+                self.current_interval = new_interval
+
+                # Initialize new price handler with updated interval
+                self.price_handler = PriceHandler(
+                    message=message,
+                    bybit_client=self.bybit_client,
+                    openrouter_client=self.chat_client,
+                    interval=new_interval
+                )
+
+                # Re-add strategies
+                for strategy in current_strategies:
+                    await self.price_handler.add_strategy(strategy)
+
+                # Initialize with new interval
+                await self.price_handler.initialize()
+
+                # Subscribe to new topics if WebSocket is active
+                if self.bybit_ws_client is not None:
+                    new_topics = [f'kline.{new_interval}.{symbol}' for symbol in symbols]
+                    await self.bybit_ws_client.subscribe(new_topics, self.price_handler)
+
+                await message.channel.send(f"✅ Interval updated to {new_interval}")
+                logger.info(f"Updated interval to {new_interval}")
+            else:
+                # Just update the interval if no active price handler
+                self.current_interval = new_interval
+                await message.channel.send(f"✅ Interval set to {new_interval}")
+                logger.info(f"Set interval to {new_interval}")
+
+        except ValueError as e:
+            await message.channel.send(f"❌ **{str(e)}**")
+        except Exception as e:
+            logger.error(f"Failed to update interval: {str(e)}", exc_info=True)
+            await message.channel.send("⚠️ **FAILED TO UPDATE INTERVAL** ⚠️")
 
     def _parse_strategies(self, strategy_input: str) -> List[StrategyType]:
         """
@@ -178,8 +249,13 @@ class CommandHandler:
         """
         try:
             if not self.price_handler:
-                # Initialize price handler with first strategy
-                self.price_handler = PriceHandler(message=message, bybit_client=self.bybit_client)
+                # Initialize price handler with first strategy and OpenRouterClient
+                self.price_handler = PriceHandler(
+                    message=message,
+                    bybit_client=self.bybit_client,
+                    openrouter_client=self.chat_client,  # Pass the same OpenRouterClient instance
+                    interval=self.current_interval
+                )
 
                 # Add all strategies
                 for strategy in strategies:
@@ -192,7 +268,7 @@ class CommandHandler:
                 if self.bybit_ws_client is not None:
                     symbols = await self.bybit_client.get_usdt_instruments()
                     await self.bybit_ws_client.subscribe(
-                        [f'kline.{DEFAULT_INTERVAL}.{symbol}' for symbol in symbols],
+                        [f'kline.{self.current_interval}.{symbol}' for symbol in symbols],
                         self.price_handler
                     )
                     logger.info(f"Subscribed to {len(symbols)} symbol candles")
@@ -250,7 +326,7 @@ class CommandHandler:
                     if self.bybit_ws_client is not None:
                         symbols = await self.bybit_client.get_usdt_instruments()
                         await self.bybit_ws_client.unsubscribe(
-                            [f'kline.{DEFAULT_INTERVAL}.{symbol}' for symbol in symbols]
+                            [f'kline.{self.current_interval}.{symbol}' for symbol in symbols]
                         )
                     await self.price_handler.cleanup()
                     self.price_handler = None
@@ -260,7 +336,7 @@ class CommandHandler:
                 if self.bybit_ws_client is not None:
                     symbols = await self.bybit_client.get_usdt_instruments()
                     await self.bybit_ws_client.unsubscribe(
-                        [f'kline.{DEFAULT_INTERVAL}.{symbol}' for symbol in symbols]
+                        [f'kline.{self.current_interval}.{symbol}' for symbol in symbols]
                     )
                 await self.price_handler.cleanup()
                 self.price_handler = None
@@ -310,12 +386,26 @@ class CommandHandler:
             return
 
         try:
-            deleted = 0
-            async for msg in message.channel.history(limit=count):
-                if not msg.pinned:
-                    await msg.delete()
-                    deleted += 1
-            logger.info(f"Cleared {deleted} messages")
+            # Use purge for efficient bulk deletion
+            channel = message.channel
+            if isinstance(channel, TextChannel):
+                # Don't delete pinned messages
+                deleted = await channel.purge(
+                    limit=count,
+                    check=lambda m: not m.pinned,
+                    bulk=True  # Enable bulk delete for messages < 14 days old
+                )
+                logger.info(f"Cleared {len(deleted)} messages using bulk delete")
+
+                # If some messages couldn't be bulk deleted (>14 days old), delete them individually
+                remaining = count - len(deleted)
+                if remaining > 0:
+                    async for msg in channel.history(limit=remaining):
+                        if not msg.pinned:
+                            await msg.delete()
+                    logger.info(f"Cleared additional {remaining} old messages individually")
+            else:
+                await message.channel.send('⚠️ **CANNOT CLEAR MESSAGES IN THIS CHANNEL TYPE** ⚠️')
 
         except Exception as e:
             logger.error("Failed to clear messages", exc_info=True)

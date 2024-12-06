@@ -76,22 +76,39 @@ class HarmonicStrategy(SignalStrategy):
         highs = []
         lows = []
 
-        for i in range(window, len(df) - window):
-            # Check for swing high
-            if all(df['high'].iloc[i] > df['high'].iloc[i-j] for j in range(1, window+1)) and \
-               all(df['high'].iloc[i] > df['high'].iloc[i+j] for j in range(1, window+1)):
-                highs.append(i)
+        try:
+            # Get price data efficiently
+            high = df['high']
+            low = df['low']
 
-            # Check for swing low
-            if all(df['low'].iloc[i] < df['low'].iloc[i-j] for j in range(1, window+1)) and \
-               all(df['low'].iloc[i] < df['low'].iloc[i+j] for j in range(1, window+1)):
-                lows.append(i)
+            for i in range(window, len(df) - window):
+                # Get window ranges efficiently
+                prev_highs = high.iloc[i-window:i]
+                next_highs = high.iloc[i+1:i+window+1]
+                prev_lows = low.iloc[i-window:i]
+                next_lows = low.iloc[i+1:i+window+1]
+
+                # Check for swing high efficiently
+                current_high = high.iat[i]
+                if current_high > prev_highs.max() and current_high > next_highs.max():
+                    highs.append(i)
+
+                # Check for swing low efficiently
+                current_low = low.iat[i]
+                if current_low < prev_lows.min() and current_low < next_lows.min():
+                    lows.append(i)
+
+        except Exception as e:
+            logger.error(f"Error finding swing points: {e}")
 
         return highs, lows
 
     def calculate_ratio(self, start: float, end: float, target: float) -> float:
         """Calculate retracement/extension ratio."""
-        return abs((end - target) / (end - start))
+        try:
+            return abs((end - target) / (end - start))
+        except ZeroDivisionError:
+            return 0.0
 
     def validate_pattern(self, points: List[float], pattern_type: str) -> float:
         """
@@ -107,25 +124,30 @@ class HarmonicStrategy(SignalStrategy):
         ratios = self.FIBONACCI_RATIOS[pattern_type]
         confidence = 0.0
 
-        # Calculate actual ratios
-        xa_ratio = self.calculate_ratio(points[0], points[1], points[1])  # XA movement
-        ab_ratio = self.calculate_ratio(points[1], points[2], points[1])  # AB retracement
-        bc_ratio = self.calculate_ratio(points[2], points[3], points[2])  # BC retracement
-        cd_ratio = self.calculate_ratio(points[3], points[4], points[3])  # CD extension
+        try:
+            # Calculate actual ratios
+            xa_ratio = self.calculate_ratio(points[0], points[1], points[1])  # XA movement
+            ab_ratio = self.calculate_ratio(points[1], points[2], points[1])  # AB retracement
+            bc_ratio = self.calculate_ratio(points[2], points[3], points[2])  # BC retracement
+            cd_ratio = self.calculate_ratio(points[3], points[4], points[3])  # CD extension
 
-        # Check each ratio against expected with tolerance
-        checks = [
-            (xa_ratio, ratios['XA']),
-            (ab_ratio, ratios['AB']),
-            (bc_ratio, ratios['BC']),
-            (cd_ratio, ratios['CD'])
-        ]
+            # Check each ratio against expected with tolerance
+            checks = [
+                (xa_ratio, ratios['XA']),
+                (ab_ratio, ratios['AB']),
+                (bc_ratio, ratios['BC']),
+                (cd_ratio, ratios['CD'])
+            ]
 
-        for actual, expected in checks:
-            diff = abs(actual - expected) / expected
-            if diff <= self.TOLERANCE:
-                # More confidence for closer matches
-                confidence += (1 - (diff / self.TOLERANCE)) * 0.25
+            for actual, expected in checks:
+                if expected != 0:
+                    diff = abs(actual - expected) / expected
+                    if diff <= self.TOLERANCE:
+                        # More confidence for closer matches
+                        confidence += (1 - (diff / self.TOLERANCE)) * 0.25
+
+        except Exception as e:
+            logger.error(f"Error validating pattern: {e}")
 
         return confidence
 
@@ -153,8 +175,9 @@ class HarmonicStrategy(SignalStrategy):
             if len(points) < 5:
                 return patterns
 
-            # Get point values
-            values = [df['close'].iloc[i] for i in points]
+            # Get point values efficiently
+            close = df['close']
+            values = [float(close.iat[i]) for i in points]
 
             # Check each pattern type
             for pattern in self.FIBONACCI_RATIOS.keys():
@@ -211,8 +234,10 @@ class HarmonicStrategy(SignalStrategy):
             # Detect general patterns
             patterns = self.detect_patterns(df)
 
-            # Volume confirmation
-            volume_confirmed = df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]
+            # Volume confirmation (optimized)
+            volume = df['volume']
+            volume_ma = volume.rolling(window=20).mean()
+            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
 
             # Generate signals with multiple confirmations
             signal = None
@@ -224,11 +249,10 @@ class HarmonicStrategy(SignalStrategy):
                 if trend > 0:  # Uptrend confirmation
                     confidence = base_confidence + (abs(trend) * 0.2)  # Pattern confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'double_bottom' in patterns:
-                        confidence += patterns['double_bottom'] * 0.1
-                    if 'breakout' in patterns:
-                        confidence += patterns['breakout'] * 0.1
+                    # Add pattern confidence efficiently
+                    for pattern, value in patterns.items():
+                        if pattern in ('double_bottom', 'breakout'):
+                            confidence += value * 0.1
 
                     # Volume confirmation
                     if volume_confirmed:
@@ -247,11 +271,10 @@ class HarmonicStrategy(SignalStrategy):
                 if trend < 0:  # Downtrend confirmation
                     confidence = base_confidence + (abs(trend) * 0.2)  # Pattern confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'double_top' in patterns:
-                        confidence += patterns['double_top'] * 0.1
-                    if 'breakdown' in patterns:
-                        confidence += patterns['breakdown'] * 0.1
+                    # Add pattern confidence efficiently
+                    for pattern, value in patterns.items():
+                        if pattern in ('double_top', 'breakdown'):
+                            confidence += value * 0.1
 
                     # Volume confirmation
                     if volume_confirmed:

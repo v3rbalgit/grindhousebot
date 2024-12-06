@@ -4,10 +4,11 @@ from typing import Dict, List, Set, Optional
 from discord import Message
 from collections import deque
 from utils.models import PriceData, SignalData, SignalConfig, StrategyType, SignalType
-from clients import BybitClient
+from clients import BybitClient, OpenRouterClient
 from strategies import StrategyFactory
+from handlers.signal_handler import SignalHandler
 from utils.logger import logger
-from utils.constants import DEFAULT_INTERVAL, DEFAULT_MINUTES
+from utils.constants import DEFAULT_INTERVAL, validate_interval, interval_to_minutes
 
 
 class PriceHandler:
@@ -19,13 +20,17 @@ class PriceHandler:
 
     def __init__(self,
                  message: Message,
-                 bybit_client: BybitClient) -> None:
+                 bybit_client: BybitClient,
+                 openrouter_client: Optional[OpenRouterClient] = None,
+                 interval: Optional[str] = None) -> None:
         """
         Initialize the price handler.
 
         Args:
         message: Discord message for sending responses
         bybit_client: Async Bybit client
+        openrouter_client: OpenRouter client for AI-enhanced analysis
+        interval: Optional interval override (e.g., '1', '5', '15', '60', etc.)
         """
         self.message = message
         self.client = bybit_client
@@ -38,15 +43,21 @@ class PriceHandler:
         self._symbol_check_task: Optional[asyncio.Task] = None
         self._running = True
 
+        # Initialize signal handler
+        self.signal_handler = SignalHandler(openrouter_client)
+
         # Signal batching
-        self._signal_batch: Dict[StrategyType, Dict[SignalType, List[SignalData]]] = {}
         self._updated_symbols: Set[str] = set()
         self._current_candle_time: Optional[int] = None
+
+        # Validate and set interval
+        self.interval_str = validate_interval(interval) if interval else DEFAULT_INTERVAL
+        self.interval_minutes = interval_to_minutes(self.interval_str)
 
     @property
     def interval(self) -> str:
         """Get the interval string used for WebSocket subscriptions."""
-        return DEFAULT_INTERVAL
+        return self.interval_str
 
     @property
     def active_strategies(self) -> List[StrategyType]:
@@ -59,7 +70,7 @@ class PriceHandler:
             return
 
         config = SignalConfig(
-            interval=DEFAULT_MINUTES,
+            interval=self.interval_minutes,
             strategy_type=strategy_type,
             window=self.FIXED_WINDOW_SIZE
         )
@@ -116,17 +127,12 @@ class PriceHandler:
         logger.info("Started symbol monitoring task")
 
     async def _initialize_symbol_data(self, symbol: str) -> None:
-        """
-        Initialize data for a new symbol.
-        """
+        """Initialize data for a new symbol."""
         try:
-            # Use the first strategy's interval for historical data
-            interval = next(iter(self.strategies.values())).interval
-
             # Fetch historical data using fixed window size
             klines = await self.client.get_klines(
                 symbol=symbol,
-                interval=str(interval),
+                interval=self.interval_str,
                 limit=self.FIXED_WINDOW_SIZE
             )
 
@@ -186,7 +192,7 @@ class PriceHandler:
             if self._current_candle_time != candle_time:
                 self._current_candle_time = candle_time
                 self._updated_symbols.clear()
-                self._signal_batch.clear()
+                self.signals.clear()  # Clear old signals for new timeframe
 
             # Create new price data point
             new_price = PriceData(
@@ -225,92 +231,65 @@ class PriceHandler:
             # Track that this symbol has been updated
             self._updated_symbols.add(symbol)
 
-            # If we've received updates for all symbols, send the signals
+            # If we've received updates for all symbols, process and send aggregated signals
             if len(self._updated_symbols) == len(self.symbols):
-                await self._send_signal_batch()
-                # Reset for next round
+                await self._process_aggregated_signals()
                 self._updated_symbols.clear()
 
         except Exception as e:
             logger.error(f"Error processing candle data for {symbol}: {e}")
 
-    def _add_to_batch(self, signal: SignalData) -> None:
-        """Add a signal to the batch."""
-        if signal.strategy not in self._signal_batch:
-            self._signal_batch[signal.strategy] = {
-                SignalType.BUY: [],
-                SignalType.SELL: []
-            }
-        self._signal_batch[signal.strategy][signal.signal_type].append(signal)
+    async def _check_signals(self, symbol: str) -> None:
+        """Check for trading signals for a symbol."""
+        # Get latest price data
+        latest_price = self.price_data[symbol][-1]
 
-    async def _send_signal_batch(self) -> None:
-        """Send all batched signals."""
+        # Check signals for each strategy
+        for strategy_type, strategy in self._strategy_instances.items():
+            try:
+                # Generate signal
+                signals = strategy.generate_signals({symbol: latest_price})
+                signal = signals.get(symbol)
+
+                if signal:
+                    # Create signal data
+                    signal_data = SignalData(
+                        symbol=symbol,
+                        strategy=strategy_type,
+                        signal_type=SignalType(signal.type),
+                        value=signal.value,
+                        timestamp=latest_price.timestamp,
+                        price=latest_price.close
+                    )
+
+                    # Store signal
+                    if symbol not in self.signals:
+                        self.signals[symbol] = {}
+                    self.signals[symbol][strategy_type] = signal_data
+
+            except Exception as e:
+                logger.error(f"Error checking {strategy_type} signals for {symbol}: {e}")
+
+    async def _process_aggregated_signals(self) -> None:
+        """Process and send aggregated signals."""
         try:
-            # Create a copy of the batch to avoid modification during iteration
-            batch_copy = {
-                strategy: {
-                    signal_type: signals.copy()
-                    for signal_type, signals in signal_dict.items()
-                }
-                for strategy, signal_dict in self._signal_batch.items()
-            }
+            # Aggregate signals using SignalHandler
+            aggregated_signals = self.signal_handler.aggregate_signals(self.signals)
 
-            # Clear the batch before processing to avoid any race conditions
-            self._signal_batch.clear()
+            if aggregated_signals:
+                # Format message using SignalHandler
+                message = await self.signal_handler.format_discord_message(aggregated_signals)
 
-            # Process the copied batch
-            for strategy, signals in batch_copy.items():
-                if not any(signals.values()):
-                    continue
-
-                message = [f"🔔 **{strategy.upper()} Signals**\n"]
-
-                # Process BUY signals
-                if signals[SignalType.BUY]:
-                    message.append("📈 **BUY Signals**")
-                    # Sort by value if numerical (RSI), or just group if string (MACD)
-                    if isinstance(signals[SignalType.BUY][0].value, (int, float)):
-                        sorted_signals = sorted(signals[SignalType.BUY], key=lambda x: x.value)
-                    else:
-                        sorted_signals = signals[SignalType.BUY]
-
-                    for signal in sorted_signals:
-                        # Format value based on type
-                        value_str = f"{signal.value:.2f}" if isinstance(signal.value, (int, float)) else signal.value
-                        message.append(
-                            f"{signal.symbol} Price: {signal.price:.8f} "
-                            f"{strategy.upper()}: {value_str}"
-                        )
-                    message.append("")
-
-                # Process SELL signals
-                if signals[SignalType.SELL]:
-                    message.append("📉 **SELL Signals**")
-                    # Sort by value if numerical (RSI), or just group if string (MACD)
-                    if isinstance(signals[SignalType.SELL][0].value, (int, float)):
-                        sorted_signals = sorted(signals[SignalType.SELL], key=lambda x: x.value, reverse=True)
-                    else:
-                        sorted_signals = signals[SignalType.SELL]
-
-                    for signal in sorted_signals:
-                        # Format value based on type
-                        value_str = f"{signal.value:.2f}" if isinstance(signal.value, (int, float)) else signal.value
-                        message.append(
-                            f"{signal.symbol} Price: {signal.price:.8f} "
-                            f"{strategy.upper()}: {value_str}"
-                        )
-
-                if len(message) > 1:
-                    await self.message.channel.send("\n".join(message))
+                # Send to Discord
+                await self.message.channel.send(message)
 
         except Exception as e:
-            logger.error(f"Error sending signal batch: {e}")
+            logger.error(f"Error processing aggregated signals: {e}")
 
     async def _check_symbols(self) -> None:
         """Periodically check for new and delisted symbols."""
         while self._running:
-            # Check every hour
-            await asyncio.sleep(3600)
+            await asyncio.sleep(3600)  # Check every hour
 
             try:
                 # Get current active symbols
@@ -323,9 +302,8 @@ class PriceHandler:
                 async with self.symbols_lock:
                     # Handle new symbols
                     for symbol in new_symbols:
-                        if await self._initialize_symbol_data(symbol):
-                            self.symbols.add(symbol)
-                            await self.message.channel.send(f"📝 New symbol listed: **{symbol}**")
+                        await self._initialize_symbol_data(symbol)
+                        await self.message.channel.send(f"📝 New symbol listed: **{symbol}**")
 
                     # Handle delisted symbols
                     for symbol in delisted_symbols:
@@ -338,50 +316,6 @@ class PriceHandler:
 
             except Exception as e:
                 logger.error(f"Error checking symbols: {e}")
-
-    async def _check_signals(self, symbol: str) -> None:
-        """
-        Check for trading signals for a symbol.
-
-        Args:
-        symbol: Symbol to check signals for
-        """
-        # Get latest price data
-        latest_price = self.price_data[symbol][-1]
-
-        # Check signals for each strategy
-        for strategy_type, strategy in self._strategy_instances.items():
-            # Generate signal
-            signals = strategy.generate_signals({symbol: latest_price})
-            signal = signals.get(symbol)
-
-            if not signal:
-                # Clear signal if it exists
-                if symbol in self.signals and strategy_type in self.signals[symbol]:
-                    logger.info(f"Signal cleared for {symbol} ({strategy_type.value.upper()})")
-                    self.signals[symbol].pop(strategy_type)
-                continue
-
-            # Create signal data
-            signal_data = SignalData(
-                symbol=symbol,
-                strategy=strategy_type,
-                signal_type=SignalType(signal.type),
-                value=signal.value,
-                timestamp=latest_price.timestamp,
-                price=latest_price.close
-            )
-
-            # Initialize signals dict for symbol if needed
-            if symbol not in self.signals:
-                self.signals[symbol] = {}
-
-            # Check if this is a new signal
-            if (strategy_type not in self.signals[symbol] or
-                self.signals[symbol][strategy_type].signal_type != signal_data.signal_type):
-                self.signals[symbol][strategy_type] = signal_data
-                logger.info(f"New {signal_data.signal_type.value.upper()} signal for {symbol} ({strategy_type.value.upper()}) at {signal_data.price}")
-                self._add_to_batch(signal_data)
 
     async def cleanup(self) -> None:
         """Clean up resources."""

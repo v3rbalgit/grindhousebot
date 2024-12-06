@@ -35,12 +35,15 @@ class RSIStrategy(SignalStrategy):
     def calculate_indicator(self, df: pd.DataFrame) -> Optional[float]:
         """Calculate RSI value with additional trend indicators."""
         try:
-            # Calculate RSI
-            df.ta.rsi(close='close', append=True)
-            if 'RSI_14' not in df.columns:
+            # Calculate RSI efficiently
+            close = df['close']
+            rsi = ta.rsi(close, length=14)
+            if rsi is None or rsi.empty:
                 return None
 
-            return float(df['RSI_14'].iloc[-1])
+            # Use iat for efficient single value access
+            return float(rsi.iat[-1])
+
         except Exception as e:
             logger.error(f"Error calculating RSI: {e}")
             return None
@@ -61,16 +64,15 @@ class RSIStrategy(SignalStrategy):
             lower_threshold, upper_threshold = self.calculate_dynamic_thresholds(df)
 
             # Calculate market trend (only if we have enough data)
-            if len(df) >= 50:  # Need at least 50 candles for reliable EMAs
-                trend = self.calculate_market_trend(df)
-            else:
-                trend = 0  # Neutral trend if not enough data
+            trend = self.calculate_market_trend(df) if len(df) >= 50 else 0
 
             # Detect patterns
             patterns = self.detect_patterns(df)
 
-            # Volume confirmation
-            volume_confirmed = df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]
+            # Volume confirmation (optimized)
+            volume = df['volume']
+            volume_ma = volume.rolling(window=20).mean()
+            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
 
             # Generate signals with multiple confirmations
             signal = None
