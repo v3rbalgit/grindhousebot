@@ -9,6 +9,11 @@ class StrategyType(str, Enum):
     """Available trading strategies."""
     RSI = "rsi"
     MACD = "macd"
+    BOLLINGER = "bollinger"
+    ICHIMOKU = "ichimoku"
+    HARMONIC = "harmonic"
+    VOLUME_PROFILE = "volume_profile"
+    ALL = "all"  # Special case to enable all strategies
 
 
 class SignalType(str, Enum):
@@ -49,12 +54,18 @@ class PriceData:
 
 
 class SignalConfig(BaseModel):
-    """Configuration for signal generation."""
+    """
+    Configuration for signal generation.
+
+    Features:
+    - Configurable time interval
+    - Window size for historical data
+    - Strategy selection
+    - Symbol tracking
+    """
     interval: int = Field(60, description="Interval in minutes")
     strategy_type: StrategyType = Field(StrategyType.RSI, description="Strategy to use")
     window: int = Field(100, description="Number of candles to keep")
-    rsi_buy: Optional[int] = Field(30, description="RSI buy threshold")
-    rsi_sell: Optional[int] = Field(70, description="RSI sell threshold")
     symbols: List[str] = Field(default_factory=list, description="Symbols to track")
 
     @field_validator('interval', mode='before')
@@ -85,7 +96,15 @@ class Command(BaseModel):
 class ListenCommand(Command):
     """Model for listen commands."""
     command: str = "listen"
-    strategy: StrategyType = Field(..., description="Strategy to listen to")
+    strategies: List[StrategyType] = Field(..., description="Strategies to listen to")
+
+    @field_validator('strategies', mode='before')
+    @classmethod
+    def validate_strategies(cls, v: Union[str, List[str]]) -> List[StrategyType]:
+        """Convert string input to list of strategies."""
+        if isinstance(v, str):
+            v = [s.strip() for s in v.split(',')]
+        return [StrategyType(s.lower()) for s in v]
 
 
 class UnlistenCommand(Command):

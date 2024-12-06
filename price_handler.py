@@ -1,11 +1,11 @@
-from __future__ import annotations
 import pandas as pd
 import asyncio
-from typing import Dict, List, Set, Optional, Union
+from typing import Dict, List, Set, Optional
 from discord import Message
+from collections import deque
 from utils.models import PriceData, SignalData, SignalConfig, StrategyType, SignalType
 from clients import BybitClient
-from strategies import RSIStrategy, MACDStrategy
+from strategies import StrategyFactory
 from utils.logger import logger
 from utils.constants import DEFAULT_INTERVAL, DEFAULT_MINUTES
 
@@ -15,6 +15,8 @@ class PriceHandler:
     Handles price data processing and signal generation.
     """
 
+    FIXED_WINDOW_SIZE = 150
+
     def __init__(self,
                  message: Message,
                  bybit_client: BybitClient) -> None:
@@ -22,17 +24,17 @@ class PriceHandler:
         Initialize the price handler.
 
         Args:
-            message: Discord message for sending responses
-            bybit_client: Async Bybit client
+        message: Discord message for sending responses
+        bybit_client: Async Bybit client
         """
         self.message = message
         self.client = bybit_client
         self.symbols: Set[str] = set()
         self.symbols_lock = asyncio.Lock()
-        self.price_data: Dict[str, List[PriceData]] = {}
+        self.price_data: Dict[str, deque] = {}
         self.signals: Dict[str, Dict[StrategyType, SignalData]] = {}
         self.strategies: Dict[StrategyType, SignalConfig] = {}
-        self._strategy_instances: Dict[StrategyType, Union[RSIStrategy, MACDStrategy]] = {}
+        self._strategy_instances = {}
         self._symbol_check_task: Optional[asyncio.Task] = None
         self._running = True
 
@@ -41,18 +43,15 @@ class PriceHandler:
         self._updated_symbols: Set[str] = set()
         self._current_candle_time: Optional[int] = None
 
-
     @property
     def interval(self) -> str:
         """Get the interval string used for WebSocket subscriptions."""
         return DEFAULT_INTERVAL
 
-
     @property
     def active_strategies(self) -> List[StrategyType]:
         """Get list of active strategies."""
         return list(self.strategies.keys())
-
 
     async def add_strategy(self, strategy_type: StrategyType) -> None:
         """Add a new strategy to monitor."""
@@ -62,35 +61,24 @@ class PriceHandler:
         config = SignalConfig(
             interval=DEFAULT_MINUTES,
             strategy_type=strategy_type,
-            window=100,
-            rsi_buy=20,
-            rsi_sell=80
+            window=self.FIXED_WINDOW_SIZE
         )
         self.strategies[strategy_type] = config
 
-        # Initialize strategy instance
-        if strategy_type == StrategyType.RSI:
-            self._strategy_instances[strategy_type] = RSIStrategy(
-                interval=config.interval,
-                window=config.window,
-                buy=config.rsi_buy or 30,
-                sell=config.rsi_sell or 70
-            )
-        else:
-            self._strategy_instances[strategy_type] = MACDStrategy(
-                interval=config.interval,
-                window=config.window
-            )
+        # Initialize strategy instance using factory
+        self._strategy_instances[strategy_type] = StrategyFactory.create_strategy(
+            strategy_type=strategy_type,
+            config=config
+        )
 
         logger.info(f"Added {strategy_type.value.upper()} strategy with {config.interval}m interval")
-
 
     async def remove_strategy(self, strategy_type: Optional[StrategyType] = None) -> None:
         """
         Remove a strategy or all strategies.
 
         Args:
-            strategy_type: Strategy to remove, or None to remove all
+        strategy_type: Strategy to remove, or None to remove all
         """
         if strategy_type:
             self.strategies.pop(strategy_type, None)
@@ -104,7 +92,6 @@ class PriceHandler:
             self._strategy_instances.clear()
             self.signals.clear()
             logger.info("Removed all strategies")
-
 
     async def initialize(self) -> None:
         """Initialize handler with market data."""
@@ -128,7 +115,6 @@ class PriceHandler:
         self._symbol_check_task = asyncio.create_task(self._check_symbols())
         logger.info("Started symbol monitoring task")
 
-
     async def _initialize_symbol_data(self, symbol: str) -> None:
         """
         Initialize data for a new symbol.
@@ -136,49 +122,49 @@ class PriceHandler:
         try:
             # Use the first strategy's interval for historical data
             interval = next(iter(self.strategies.values())).interval
+
+            # Fetch historical data using fixed window size
             klines = await self.client.get_klines(
                 symbol=symbol,
                 interval=str(interval),
-                limit=max(s.window for s in self.strategies.values())
+                limit=self.FIXED_WINDOW_SIZE
             )
 
-            self.price_data[symbol] = [
-                PriceData(
-                    symbol=symbol,
-                    timestamp=k["start_time"],
-                    open=k["open"],
-                    high=k["high"],
-                    low=k["low"],
-                    close=k["close"],
-                    volume=k["volume"],
-                    turnover=k["turnover"]
-                )
-                for k in klines
-            ]
+            # Initialize deque with fixed window size
+            price_deque = deque([PriceData(
+                symbol=symbol,
+                timestamp=k["start_time"],
+                open=k["open"],
+                high=k["high"],
+                low=k["low"],
+                close=k["close"],
+                volume=k["volume"],
+                turnover=k["turnover"]
+            ) for k in klines], maxlen=self.FIXED_WINDOW_SIZE)
 
             async with self.symbols_lock:
                 self.symbols.add(symbol)
+                self.price_data[symbol] = price_deque
 
             # Initialize strategy data
             for strategy in self._strategy_instances.values():
                 if symbol not in strategy.dataframes:
                     df = pd.DataFrame(
-                        [p.to_dict() for p in self.price_data[symbol]],
-                        index=[p.timestamp for p in self.price_data[symbol]]
+                        [p.to_dict() for p in price_deque],
+                        index=[p.timestamp for p in price_deque]
                     )
                     strategy.dataframes[symbol] = df
 
         except Exception as e:
             logger.debug(f"Failed to initialize data for {symbol}: {e}")
 
-
     async def handle_price_update(self, data: Dict, symbol: str) -> None:
         """
         Process a price update for a symbol.
 
         Args:
-            data: Price update data from WebSocket
-            symbol: Symbol being updated
+        data: Price update data from WebSocket
+        symbol: Symbol being updated
         """
         if symbol not in self.symbols:
             return
@@ -216,33 +202,20 @@ class PriceHandler:
 
             # Update price history
             if symbol in self.price_data:
-                if self.price_data[symbol] and self.price_data[symbol][-1].timestamp == new_price.timestamp:
-                    self.price_data[symbol][-1] = new_price
-                    logger.debug(f"Updated existing candle for {symbol}")
-                else:
-                    self.price_data[symbol].append(new_price)
-                    max_window = max(s.window for s in self.strategies.values())
-                    self.price_data[symbol] = self.price_data[symbol][-max_window:]
-                    logger.debug(f"Added new candle for {symbol}")
-            else:
-                self.price_data[symbol] = [new_price]
-                logger.debug(f"Started new price history for {symbol}")
+                self.price_data[symbol].append(new_price)
+                logger.debug(f"Added new candle for {symbol}")
 
             # Update strategy dataframes
             for strategy in self._strategy_instances.values():
                 if symbol in strategy.dataframes:
                     df = strategy.dataframes[symbol]
-                    if len(df) > 0 and df.index[-1] == new_price.timestamp:
-                        for col, val in new_price.to_dict().items():
-                            df.loc[new_price.timestamp, col] = val
-                    else:
-                        new_data = pd.DataFrame(
-                            [new_price.to_dict()],
-                            index=[new_price.timestamp]
-                        )
-                        df = pd.concat([df, new_data])
-                        if len(df) > strategy.window:
-                            df = df.iloc[-strategy.window:]
+                    new_data = pd.DataFrame(
+                        [new_price.to_dict()],
+                        index=[new_price.timestamp]
+                    )
+                    df = pd.concat([df, new_data])
+                    if len(df) > self.FIXED_WINDOW_SIZE:
+                        df = df.iloc[-self.FIXED_WINDOW_SIZE:]
                     strategy.dataframes[symbol] = df
 
             # Generate signals if we have enough data
@@ -261,7 +234,6 @@ class PriceHandler:
         except Exception as e:
             logger.error(f"Error processing candle data for {symbol}: {e}")
 
-
     def _add_to_batch(self, signal: SignalData) -> None:
         """Add a signal to the batch."""
         if signal.strategy not in self._signal_batch:
@@ -271,11 +243,23 @@ class PriceHandler:
             }
         self._signal_batch[signal.strategy][signal.signal_type].append(signal)
 
-
     async def _send_signal_batch(self) -> None:
         """Send all batched signals."""
         try:
-            for strategy, signals in self._signal_batch.items():
+            # Create a copy of the batch to avoid modification during iteration
+            batch_copy = {
+                strategy: {
+                    signal_type: signals.copy()
+                    for signal_type, signals in signal_dict.items()
+                }
+                for strategy, signal_dict in self._signal_batch.items()
+            }
+
+            # Clear the batch before processing to avoid any race conditions
+            self._signal_batch.clear()
+
+            # Process the copied batch
+            for strategy, signals in batch_copy.items():
                 if not any(signals.values()):
                     continue
 
@@ -319,9 +303,6 @@ class PriceHandler:
                 if len(message) > 1:
                     await self.message.channel.send("\n".join(message))
 
-            # Clear processed signals
-            self._signal_batch.clear()
-
         except Exception as e:
             logger.error(f"Error sending signal batch: {e}")
 
@@ -358,14 +339,12 @@ class PriceHandler:
             except Exception as e:
                 logger.error(f"Error checking symbols: {e}")
 
-
-
     async def _check_signals(self, symbol: str) -> None:
         """
         Check for trading signals for a symbol.
 
         Args:
-            symbol: Symbol to check signals for
+        symbol: Symbol to check signals for
         """
         # Get latest price data
         latest_price = self.price_data[symbol][-1]
@@ -379,7 +358,7 @@ class PriceHandler:
             if not signal:
                 # Clear signal if it exists
                 if symbol in self.signals and strategy_type in self.signals[symbol]:
-                    logger.info(f"Signal cleared for {symbol} ({strategy_type})")
+                    logger.info(f"Signal cleared for {symbol} ({strategy_type.value.upper()})")
                     self.signals[symbol].pop(strategy_type)
                 continue
 
@@ -401,9 +380,8 @@ class PriceHandler:
             if (strategy_type not in self.signals[symbol] or
                 self.signals[symbol][strategy_type].signal_type != signal_data.signal_type):
                 self.signals[symbol][strategy_type] = signal_data
-                logger.info(f"New {signal_data.signal_type} signal for {symbol} ({strategy_type}) at {signal_data.price}")
+                logger.info(f"New {signal_data.signal_type.value.upper()} signal for {symbol} ({strategy_type.value.upper()}) at {signal_data.price}")
                 self._add_to_batch(signal_data)
-
 
     async def cleanup(self) -> None:
         """Clean up resources."""
@@ -415,4 +393,3 @@ class PriceHandler:
             except asyncio.CancelledError:
                 pass
         logger.info("Cleaned up PriceHandler resources")
-
