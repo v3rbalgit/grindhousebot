@@ -36,22 +36,44 @@ class BollingerStrategy(SignalStrategy):
     def calculate_indicator(self, df: pd.DataFrame) -> Optional[Dict[str, float]]:
         """Calculate Bollinger Bands with additional indicators."""
         try:
-            # Calculate Bollinger Bands
-            bb = ta.bbands(df['close'], length=20, std=2)
+            # Calculate Bollinger Bands efficiently
+            close = df['close']
+            bb = ta.bbands(close, length=20, std=2)
             if bb is None or bb.empty:
+                logger.warning("Bollinger Bands calculation returned None or empty")
                 return None
 
-            # Get latest values
-            current_close = float(df['close'].iloc[-1])
-            upper_band = float(bb['BBU_20_2.0'].iloc[-1])
-            middle_band = float(bb['BBM_20_2.0'].iloc[-1])
-            lower_band = float(bb['BBL_20_2.0'].iloc[-1])
+            # Verify required columns exist
+            required_columns = ['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0']
+            if not all(col in bb.columns for col in required_columns):
+                logger.warning(f"Missing required BB columns. Available columns: {bb.columns.tolist()}")
+                return None
+
+            # Get latest values efficiently
+            try:
+                current_close = float(close.iat[-1])
+                upper_band = float(bb['BBU_20_2.0'].iat[-1])
+                middle_band = float(bb['BBM_20_2.0'].iat[-1])
+                lower_band = float(bb['BBL_20_2.0'].iat[-1])
+            except (IndexError, KeyError) as e:
+                logger.error(f"Error accessing BB values: {e}")
+                return None
+
+            # Avoid division by zero
+            if middle_band == 0 or (upper_band - lower_band) == 0:
+                logger.warning("Invalid BB values (division by zero)")
+                return None
 
             # Calculate BB width (volatility measure)
             bb_width = (upper_band - lower_band) / middle_band
 
             # Calculate % B (position within bands)
             percent_b = (current_close - lower_band) / (upper_band - lower_band)
+
+            # Store BB values for pattern detection
+            df['BBU_20_2.0'] = bb['BBU_20_2.0']
+            df['BBM_20_2.0'] = bb['BBM_20_2.0']
+            df['BBL_20_2.0'] = bb['BBL_20_2.0']
 
             return {
                 'close': current_close,
@@ -79,30 +101,49 @@ class BollingerStrategy(SignalStrategy):
         """
         patterns = {}
         try:
-            # Get historical BB values
-            bb_hist = ta.bbands(df['close'].iloc[-20:], length=20, std=2)
+            # Get recent data efficiently
+            recent_data = df.iloc[-20:]
+            close = recent_data['close']
+            upper = recent_data['BBU_20_2.0']
+            lower = recent_data['BBL_20_2.0']
+            middle = recent_data['BBM_20_2.0']
 
             # Detect BB squeeze (low volatility)
-            recent_widths = (bb_hist['BBU_20_2.0'] - bb_hist['BBL_20_2.0']) / bb_hist['BBM_20_2.0']
-            avg_width = recent_widths.mean()
-            if bb_values['width'] < avg_width * 0.8:  # Width is 20% below average
-                patterns['squeeze'] = 0.8
+            try:
+                recent_widths = (upper - lower) / middle
+                avg_width = recent_widths.mean()
+                if bb_values['width'] < avg_width * 0.8:  # Width is 20% below average
+                    patterns['squeeze'] = 0.8
+            except Exception as e:
+                logger.warning(f"Error calculating BB squeeze: {e}")
 
-            # Detect price touches on bands
-            if abs(bb_values['close'] - bb_values['upper']) / bb_values['upper'] < 0.001:
-                patterns['upper_touch'] = 0.7
-            elif abs(bb_values['close'] - bb_values['lower']) / bb_values['lower'] < 0.001:
-                patterns['lower_touch'] = 0.7
+            # Detect price touches on bands efficiently
+            try:
+                current_close = bb_values['close']
+                if abs(current_close - bb_values['upper']) / bb_values['upper'] < 0.001:
+                    patterns['upper_touch'] = 0.7
+                elif abs(current_close - bb_values['lower']) / bb_values['lower'] < 0.001:
+                    patterns['lower_touch'] = 0.7
+            except Exception as e:
+                logger.warning(f"Error detecting band touches: {e}")
 
-            # Detect walking the band (consistent touches)
-            recent_closes = df['close'].iloc[-5:]
-            upper_touches = sum(1 for c, u in zip(recent_closes, bb_hist['BBU_20_2.0']) if abs(c - u) / u < 0.001)
-            lower_touches = sum(1 for c, l in zip(recent_closes, bb_hist['BBL_20_2.0']) if abs(c - l) / l < 0.001)
+            # Detect walking the band efficiently
+            try:
+                recent_closes = close.tail(5)
+                recent_upper = upper.tail(5)
+                recent_lower = lower.tail(5)
 
-            if upper_touches >= 3:
-                patterns['walking_upper'] = 0.9
-            elif lower_touches >= 3:
-                patterns['walking_lower'] = 0.9
+                upper_touches = sum(1 for c, u in zip(recent_closes, recent_upper)
+                                if abs(c - u) / u < 0.001)
+                lower_touches = sum(1 for c, l in zip(recent_closes, recent_lower)
+                                if abs(c - l) / l < 0.001)
+
+                if upper_touches >= 3:
+                    patterns['walking_upper'] = 0.9
+                elif lower_touches >= 3:
+                    patterns['walking_lower'] = 0.9
+            except Exception as e:
+                logger.warning(f"Error detecting band walking: {e}")
 
         except Exception as e:
             logger.error(f"Error detecting BB patterns: {e}")
@@ -130,8 +171,10 @@ class BollingerStrategy(SignalStrategy):
             # Detect general patterns
             patterns = self.detect_patterns(df)
 
-            # Volume confirmation
-            volume_confirmed = df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]
+            # Volume confirmation (optimized)
+            volume = df['volume']
+            volume_ma = volume.rolling(window=20).mean()
+            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
 
             # Generate signals with multiple confirmations
             signal = None

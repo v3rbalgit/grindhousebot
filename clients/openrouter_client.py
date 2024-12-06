@@ -16,10 +16,13 @@ class OpenRouterClient:
         """
         self.api_key = api_key or getenv('OPENROUTER_API_KEY', '')
         self.base_url = "https://openrouter.ai/api/v1"
-        self.model = "mistralai/mistral-7b-instruct"  # Good balance of performance and cost
 
-        # System prompt to focus responses
-        self.system_prompt = """You are GrindhouseBot's AI assistant, focused on cryptocurrency trading and technical analysis.
+        # Models for different purposes
+        self.chat_model = "google/gemini-flash-1.5-8b"  # High throughput, multilingual
+        self.analysis_model = "openai/gpt-4-turbo"      # Superior analysis
+
+        # System prompts
+        self.chat_prompt = """You are GrindhouseBot's AI assistant, focused on cryptocurrency trading and technical analysis.
 
 Bot Commands and Usage:
 1. !listen <strategies> - Start monitoring trading signals
@@ -37,11 +40,22 @@ Bot Commands and Usage:
    - Stop specific strategy: !unlisten rsi
    - Stop all: !unlisten
 
-3. !top winners/losers - Show best/worst performing coins
+3. !interval <value> - Change analysis timeframe
+   - Valid intervals:
+     * Minutes: 1, 3, 5, 15, 30, 60, 120, 240, 360, 720
+     * Daily: 'D' (1440 minutes)
+     * Weekly: 'W' (10080 minutes)
+     * Monthly: 'M' (43200 minutes)
+   - Examples:
+     * !interval 240  # 4-hour candles
+     * !interval 60   # 1-hour candles
+     * !interval D    # Daily candles
 
-4. !chat <question> - Ask about crypto or bot features
+4. !top winners/losers - Show best/worst performing coins
 
-5. !clear <count> - Clear messages
+5. !chat <question> - Ask about crypto or bot features
+
+6. !clear <count> - Clear messages
 
 Strategy Details:
 - RSI Strategy: Uses dynamic thresholds that adapt to volatility, requires 15 candles
@@ -65,6 +79,7 @@ Keep your responses:
 - Focused on bot usage and crypto
 - Technical but understandable
 - Under 200 words
+- Support multiple languages when requested
 
 When explaining commands:
 - Use specific examples
@@ -74,18 +89,43 @@ When explaining commands:
 
 Always include a disclaimer for any market-related responses."""
 
-    async def chat(self, user_message: str) -> str:
+        # Trading analysis system prompt
+        self.analysis_prompt = """You are a professional crypto trading analyst. Your task is to analyze trading signals and provide clear, actionable insights. Focus on:
+
+1. Key technical indicators and what they suggest
+2. Important price levels to watch (support, resistance, targets)
+3. Market context and potential catalysts
+4. Clear entry, stop loss, and take profit levels
+5. Risk assessment and position sizing suggestions
+
+Your analysis should be:
+- Precise and data-driven
+- Based on multiple confirmations
+- Clear and actionable
+- Under 150 words
+
+Include:
+- Specific price targets
+- Risk/reward ratios
+- Confidence levels
+- Key risks to watch
+
+End with a brief risk disclaimer."""
+
+    async def _make_request(self,
+                          messages: list,
+                          model: str,
+                          temperature: float = 0.7) -> Optional[str]:
         """
-        Send chat request to OpenRouter API.
+        Make a request to OpenRouter API.
 
         Args:
-            user_message: User's question or message
+            messages: List of message dictionaries
+            model: Model to use
+            temperature: Response temperature (0.0-1.0)
 
         Returns:
-            AI response string
-
-        Raises:
-            Exception: If API request fails
+            Generated text if successful, None otherwise
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -95,11 +135,9 @@ Always include a disclaimer for any market-related responses."""
         }
 
         data = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_message}
-            ]
+            "model": model,
+            "messages": messages,
+            "temperature": temperature
         }
 
         try:
@@ -111,14 +149,65 @@ Always include a disclaimer for any market-related responses."""
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        raise Exception(f"API request failed: {error_text}")
+                        logger.error(f"API request failed: {error_text}")
+                        return None
 
                     result = await response.json()
                     return result['choices'][0]['message']['content']
 
         except Exception as e:
             logger.error(f"OpenRouter API error: {str(e)}")
-            raise
+            return None
+
+    async def chat(self, user_message: str) -> str:
+        """
+        Send chat request to OpenRouter API using the chat model.
+
+        Args:
+            user_message: User's question or message
+
+        Returns:
+            AI response string
+
+        Raises:
+            Exception: If API request fails
+        """
+        messages = [
+            {"role": "system", "content": self.chat_prompt},
+            {"role": "user", "content": user_message}
+        ]
+
+        response = await self._make_request(
+            messages=messages,
+            model=self.chat_model,
+            temperature=0.7  # Good balance for chat
+        )
+
+        if response is None:
+            raise Exception("Failed to get chat response")
+
+        return response
+
+    async def generate_text(self, prompt: str) -> Optional[str]:
+        """
+        Generate trading analysis text using OpenRouter API with the analysis model.
+
+        Args:
+            prompt: Analysis prompt with trading signal details
+
+        Returns:
+            Generated analysis text, or None if generation fails
+        """
+        messages = [
+            {"role": "system", "content": self.analysis_prompt},
+            {"role": "user", "content": prompt}
+        ]
+
+        return await self._make_request(
+            messages=messages,
+            model=self.analysis_model,
+            temperature=0.3  # Lower temperature for more focused analysis
+        )
 
     async def check_models(self) -> Dict[str, Any]:
         """

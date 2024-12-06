@@ -1,6 +1,5 @@
 import pandas as pd
-import numpy as np
-from typing import Optional, Dict, List, Tuple, Union, Any, TypedDict
+from typing import Optional, Dict, Tuple, TypedDict
 from .base import SignalStrategy
 from utils.models import Signal, SignalType
 from utils.logger import logger
@@ -53,10 +52,15 @@ class VolumeProfileStrategy(SignalStrategy):
             Tuple of (volume profile, POC price, value area)
         """
         try:
+            # Get price data efficiently
+            high = df['high']
+            low = df['low']
+            volume = df['volume']
+
             # Calculate price range
-            price_min = df['low'].min()
-            price_max = df['high'].max()
-            if not (isinstance(price_min, (int, float)) and isinstance(price_max, (int, float))):
+            price_min = float(low.min())
+            price_max = float(high.max())
+            if price_min >= price_max:
                 return pd.Series(dtype=float), 0.0, 0.0
 
             price_delta = (price_max - price_min) / self.price_levels
@@ -65,25 +69,32 @@ class VolumeProfileStrategy(SignalStrategy):
             price_levels = [price_min + i * price_delta for i in range(self.price_levels + 1)]
             profile = pd.Series(0.0, index=range(self.price_levels))
 
-            # Distribute volume across price levels
-            for _, row in df.iterrows():
-                row_low = float(row['low'])
-                row_high = float(row['high'])
-                row_volume = float(row['volume'])
+            # Distribute volume across price levels efficiently
+            for i in range(len(df)):
+                row_low = float(low.iat[i])
+                row_high = float(high.iat[i])
+                row_volume = float(volume.iat[i])
+                row_range = row_high - row_low
 
-                for i in range(self.price_levels):
-                    level_low = price_levels[i]
-                    level_high = price_levels[i + 1]
+                if row_range <= 0:
+                    continue
+
+                for j in range(self.price_levels):
+                    level_low = price_levels[j]
+                    level_high = price_levels[j + 1]
                     if row_low <= level_high and row_high >= level_low:
                         overlap = min(row_high, level_high) - max(row_low, level_low)
-                        profile.iloc[i] += row_volume * (overlap / (row_high - row_low))
+                        profile.iloc[j] += row_volume * (overlap / row_range)
 
-            # Find Point of Control (price level with highest volume)
+            # Find Point of Control efficiently
             poc_idx = int(profile.idxmax())
-            poc_price = price_levels[poc_idx] + price_delta / 2
+            poc_price = float(price_levels[poc_idx] + price_delta / 2)
 
-            # Calculate Value Area (70% of total volume)
+            # Calculate Value Area efficiently
             total_volume = float(profile.sum())
+            if total_volume == 0:
+                return profile, poc_price, poc_price
+
             sorted_idx = profile.sort_values(ascending=False).index
             cumsum = 0.0
             value_area_idx = []
@@ -94,7 +105,7 @@ class VolumeProfileStrategy(SignalStrategy):
                 if cumsum >= total_volume * 0.7:
                     break
 
-            value_area = price_levels[max(value_area_idx)] + price_delta / 2
+            value_area = float(price_levels[max(value_area_idx)] + price_delta / 2)
 
             return profile, poc_price, value_area
 
@@ -115,52 +126,58 @@ class VolumeProfileStrategy(SignalStrategy):
         """
         patterns = {}
         try:
-            current_price = float(df['close'].iloc[-1])
+            # Get price data efficiently
+            close = df['close']
+            high = df['high']
+            low = df['low']
+            current_price = float(close.iat[-1])
 
-            # Find high volume nodes (HVN)
-            volume_threshold = float(profile.quantile(self.volume_threshold))
-            hvn_indices = profile[profile > volume_threshold].index.tolist()
-
-            # Find low volume nodes (LVN)
-            lvn_threshold = float(profile.quantile(0.2))  # Bottom 20%
-            lvn_indices = profile[profile < lvn_threshold].index.tolist()
-
-            # Calculate price per level
-            price_min = float(df['low'].min())
-            price_max = float(df['high'].max())
+            # Calculate price levels
+            price_min = float(low.min())
+            price_max = float(high.max())
             price_delta = (price_max - price_min) / self.price_levels
 
-            # Check for price near HVN
+            # Find volume nodes efficiently
+            volume_threshold = float(profile.quantile(self.volume_threshold))
+            lvn_threshold = float(profile.quantile(0.2))  # Bottom 20%
+
+            hvn_indices = profile[profile > volume_threshold].index
+            lvn_indices = profile[profile < lvn_threshold].index
+
+            # Cache price calculations
+            level_prices = {
+                idx: price_min + idx * price_delta
+                for idx in set(hvn_indices) | set(lvn_indices)
+            }
+
+            # Check for price near HVN efficiently
             for idx in hvn_indices:
-                level_price = price_min + idx * price_delta
-                if abs(current_price - level_price) < price_delta:
+                if abs(current_price - level_prices[idx]) < price_delta:
                     patterns['at_hvn'] = 0.8
                     break
 
-            # Check for price in LVN
+            # Check for price in LVN efficiently
             for idx in lvn_indices:
-                level_price = price_min + idx * price_delta
-                if abs(current_price - level_price) < price_delta:
+                if abs(current_price - level_prices[idx]) < price_delta:
                     patterns['in_lvn'] = 0.7
                     break
 
-            # Check for price acceptance
-            recent_prices = [float(p) for p in df['close'].tail(10)]
-            for idx in hvn_indices:
-                level_price = price_min + idx * price_delta
-                if all(abs(p - level_price) < price_delta for p in recent_prices):
-                    patterns['price_acceptance'] = 0.9
-                    break
-
-            # Check for price rejection
-            if len(df) >= 5:
-                recent_high = float(df['high'].tail(5).max())
-                recent_close = float(df['close'].iloc[-1])
-
+            # Check for price acceptance efficiently
+            if len(df) >= 10:
+                recent_closes = close.tail(10)
                 for idx in hvn_indices:
-                    level_price = price_min + idx * price_delta
+                    level_price = level_prices[idx]
+                    if all(abs(float(p) - level_price) < price_delta for p in recent_closes):
+                        patterns['price_acceptance'] = 0.9
+                        break
+
+            # Check for price rejection efficiently
+            if len(df) >= 5:
+                recent_high = float(high.tail(5).max())
+                for idx in hvn_indices:
+                    level_price = level_prices[idx]
                     if (abs(recent_high - level_price) < price_delta and
-                        recent_close < level_price - price_delta):
+                        current_price < level_price - price_delta):
                         patterns['price_rejection'] = 0.8
                         break
 
@@ -177,7 +194,7 @@ class VolumeProfileStrategy(SignalStrategy):
             if profile.empty:
                 return None
 
-            current_price = float(df['close'].iloc[-1])
+            current_price = float(df['close'].iat[-1])
 
             return {
                 'current_price': current_price,
@@ -216,10 +233,10 @@ class VolumeProfileStrategy(SignalStrategy):
             poc_price = profile_data['poc_price']
             value_area = profile_data['value_area']
 
-            # Volume confirmation
-            volume = float(df['volume'].iloc[-1])
-            volume_ma = float(df['volume'].rolling(window=20).mean().iloc[-1])
-            volume_confirmed = volume > volume_ma
+            # Volume confirmation (optimized)
+            volume = df['volume']
+            volume_ma = volume.rolling(window=20).mean()
+            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
 
             # Generate signals with multiple confirmations
             signal = None
@@ -229,11 +246,10 @@ class VolumeProfileStrategy(SignalStrategy):
                 if trend > 0:  # Uptrend confirmation
                     confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'at_hvn' in volume_patterns:
-                        confidence += volume_patterns['at_hvn'] * 0.2
-                    if 'price_acceptance' in volume_patterns:
-                        confidence += volume_patterns['price_acceptance'] * 0.2
+                    # Add pattern confidence efficiently
+                    for pattern, value in volume_patterns.items():
+                        if pattern in ('at_hvn', 'price_acceptance'):
+                            confidence += value * 0.2
 
                     # Volume confirmation
                     if volume_confirmed:
@@ -252,11 +268,10 @@ class VolumeProfileStrategy(SignalStrategy):
                 if trend < 0:  # Downtrend confirmation
                     confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'in_lvn' in volume_patterns:
-                        confidence += volume_patterns['in_lvn'] * 0.2
-                    if 'price_rejection' in volume_patterns:
-                        confidence += volume_patterns['price_rejection'] * 0.2
+                    # Add pattern confidence efficiently
+                    for pattern, value in volume_patterns.items():
+                        if pattern in ('in_lvn', 'price_rejection'):
+                            confidence += value * 0.2
 
                     # Volume confirmation
                     if volume_confirmed:

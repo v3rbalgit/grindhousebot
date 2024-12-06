@@ -43,30 +43,47 @@ class SignalStrategy(ABC):
         signals = {}
 
         for symbol, price in prices.items():
-            # Create or update price DataFrame
-            new_data = pd.DataFrame(
-                [price.to_dict()],
-                index=[price.timestamp]
-            )
+            try:
+                # Create new data with timestamp as index
+                timestamp = pd.to_datetime(price.timestamp)
+                new_data = pd.DataFrame(
+                    [price.to_dict()],
+                    index=[timestamp]
+                )
 
-            if symbol not in self.dataframes:
-                self.dataframes[symbol] = new_data
-                logger.debug(f"Created new DataFrame for {symbol}")
-            else:
-                df = self.dataframes[symbol]
-                df = pd.concat([df, new_data])
+                if symbol not in self.dataframes:
+                    self.dataframes[symbol] = new_data
+                    logger.debug(f"Created new DataFrame for {symbol}")
+                else:
+                    df = self.dataframes[symbol]
 
-                # Keep only required window of data
-                if len(df) > self.window:
-                    df = df.iloc[-self.window:]
+                    # Ensure index is datetime (only if needed)
+                    if not isinstance(df.index, pd.DatetimeIndex):
+                        df.index = pd.to_datetime(df.index)
 
-                self.dataframes[symbol] = df
+                    # Optimize DataFrame operations
+                    if len(df) >= self.window:
+                        # If at max window, drop oldest and append new
+                        df = pd.concat([df.iloc[-(self.window-1):], new_data])
+                    else:
+                        # Otherwise just append
+                        df = pd.concat([df, new_data])
 
-            # Generate signal if we have enough data
-            if len(self.dataframes[symbol]) >= self.min_candles:
-                signals[symbol] = self.process(symbol)
-            else:
-                logger.debug(f"Insufficient data for {symbol} ({len(self.dataframes[symbol])}/{self.min_candles} candles)")
+                    # Remove duplicates and sort (if needed)
+                    if df.index.duplicated().any():
+                        df = df[~df.index.duplicated(keep='last')].sort_index()
+
+                    self.dataframes[symbol] = df
+
+                # Generate signal if we have enough data
+                if len(self.dataframes[symbol]) >= self.min_candles:
+                    signals[symbol] = self.process(symbol)
+                else:
+                    logger.debug(f"Insufficient data for {symbol} ({len(self.dataframes[symbol])}/{self.min_candles} candles)")
+                    signals[symbol] = None
+
+            except Exception as e:
+                logger.error(f"Error processing data for {symbol}: {e}")
                 signals[symbol] = None
 
         return signals
@@ -77,13 +94,12 @@ class SignalStrategy(ABC):
         self.dataframes.clear()
         logger.debug(f"Cleared {count} DataFrames from memory")
 
-    def calculate_market_trend(self, df: pd.DataFrame, period: int = 20) -> float:
+    def calculate_market_trend(self, df: pd.DataFrame) -> float:
         """
         Calculate the overall market trend using multiple indicators.
 
         Args:
             df: Price DataFrame
-            period: Period for trend calculation
 
         Returns:
             Trend strength (-1 to 1, where -1 is strong downtrend, 1 is strong uptrend)
@@ -93,33 +109,32 @@ class SignalStrategy(ABC):
                 return 0
 
             # Calculate EMAs for trend direction
-            ema20 = ta.ema(df['close'], length=20)
-            ema50 = ta.ema(df['close'], length=50)
+            close = df['close']
+            ema20 = ta.ema(close, length=20)
+            ema50 = ta.ema(close, length=50)
 
             # Calculate ADX for trend strength
-            adx = ta.adx(df['high'], df['low'], df['close'])
+            adx = ta.adx(df['high'], df['low'], close)
 
             # Check for None values
             if ema20 is None or ema50 is None or adx is None:
                 return 0
 
-            # Get latest values, ensuring they exist
-            ema20_last = ema20.iloc[-1] if not ema20.empty else None
-            ema50_last = ema50.iloc[-1] if not ema50.empty else None
-            adx_last = adx['ADX_14'].iloc[-1] if not adx.empty else None
-
-            # Safety check for None values
-            if ema20_last is None or ema50_last is None or adx_last is None:
+            # Get latest values efficiently
+            try:
+                ema20_last = float(ema20.iat[-1])
+                ema50_last = float(ema50.iat[-1])
+                adx_last = float(adx['ADX_14'].iat[-1])
+            except (IndexError, KeyError, ValueError):
                 return 0
 
             # Calculate trend
             ema_trend = 1 if ema20_last > ema50_last else -1
-            adx_strength = min(float(adx_last) / 100, 1)  # Normalize to 0-1
+            adx_strength = min(adx_last / 100, 1)  # Normalize to 0-1
 
             # Combine signals
-            trend = ema_trend * adx_strength
+            return ema_trend * adx_strength
 
-            return trend
         except Exception as e:
             logger.error(f"Error calculating market trend: {e}")
             return 0
@@ -136,27 +151,32 @@ class SignalStrategy(ABC):
         """
         patterns = {}
         try:
-            # Example patterns (extend based on strategy needs):
+            # Cache common calculations
+            close = df['close']
+            high = df['high']
+            low = df['low']
+            volume = df['volume']
 
-            # Double Bottom
+            # Double Bottom (optimized)
             if len(df) >= 20:
-                lows = df['low'].rolling(window=5).min()
-                if len(lows.unique()) >= 2:
-                    recent_lows = lows.tail(20)
-                    min_points = recent_lows[recent_lows == recent_lows.min()].index
+                lows_5min = low.rolling(window=5).min()
+                if len(lows_5min.unique()) >= 2:
+                    recent_lows = lows_5min.tail(20)
+                    min_val = recent_lows.min()
+                    min_points = recent_lows[recent_lows == min_val].index
                     if len(min_points) >= 2:
                         patterns['double_bottom'] = 0.8
 
-            # Breakout
+            # Breakout (optimized)
             if len(df) >= 10:
-                recent_high = df['high'].rolling(window=10).max().iloc[-1]
-                if df['close'].iloc[-1] > recent_high:
+                high_10max = high.rolling(window=10).max()
+                if close.iat[-1] > high_10max.iat[-1]:
                     patterns['breakout'] = 0.9
 
-            # Volume Spike
+            # Volume Spike (optimized)
             if len(df) >= 5:
-                avg_volume = df['volume'].rolling(window=5).mean().iloc[-1]
-                if df['volume'].iloc[-1] > avg_volume * 2:
+                vol_5avg = volume.rolling(window=5).mean()
+                if volume.iat[-1] > vol_5avg.iat[-1] * 2:
                     patterns['volume_spike'] = 0.7
 
         except Exception as e:
@@ -175,22 +195,17 @@ class SignalStrategy(ABC):
             Tuple of (lower_threshold, upper_threshold)
         """
         try:
-            # Calculate volatility
-            returns = df['close'].pct_change()
+            # Calculate volatility efficiently
+            close = df['close']
+            returns = (close - close.shift(1)) / close.shift(1)  # More efficient than pct_change()
             volatility = returns.std()
 
             # Adjust thresholds based on volatility
-            base_lower = 30
-            base_upper = 70
-
-            # More volatile markets need wider thresholds
             volatility_factor = min(volatility * 100, 1)  # Cap at 100%
             threshold_adjustment = 10 * volatility_factor
 
-            lower_threshold = base_lower - threshold_adjustment
-            upper_threshold = base_upper + threshold_adjustment
+            return 30 - threshold_adjustment, 70 + threshold_adjustment
 
-            return lower_threshold, upper_threshold
         except Exception as e:
             logger.error(f"Error calculating dynamic thresholds: {e}")
             return 30, 70  # Default values

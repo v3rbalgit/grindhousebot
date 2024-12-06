@@ -5,15 +5,17 @@ A powerful Discord bot for cryptocurrency trading signals and real-time market m
 ## Features 🌟
 
 - Real-time trading signals using multiple technical analysis strategies
+- AI-enhanced signal analysis
 - Dynamic market analysis with adaptive thresholds
 - Live monitoring of USDT perpetual contracts
 - Market performance tracking with top gainers and losers
-- AI-powered chat assistance for crypto and trading questions
+- Multilingual AI chat assistance
 - Efficient in-memory price data management
 - Docker support for easy deployment
 - Extensible strategy system with factory pattern
-- Configurable time intervals for analysis
+- Adjustable time intervals for analysis
 - Multi-strategy signal monitoring
+- Combined confidence scoring system
 
 ## Trading Strategies 📈
 
@@ -141,7 +143,19 @@ Choose an interval that matches your trading strategy. For example:
     !unlisten          # Stop all strategies
     ```
 
+- `!interval <value>` - Change the analysis timeframe
+  - Valid intervals:
+    * Minutes: 1, 3, 5, 15, 30, 60, 120, 240, 360, 720
+    * Special: D (daily), W (weekly), M (monthly)
+  - Examples:
+    ```
+    !interval 240  # Switch to 4-hour candles
+    !interval 60   # Switch to 1-hour candles
+    !interval D    # Switch to daily candles
+    ```
+
 - `!chat <question>` - Ask the bot about crypto trading or its features
+  - Multilingual support
   - Get concise answers about:
     * Cryptocurrency markets and trading
     * Bot features and strategies
@@ -159,6 +173,52 @@ Choose an interval that matches your trading strategy. For example:
 
 - `!clear <count>` - Clear specified number of messages from the channel
   - Example: `!clear 100`
+
+## Signal Output Format 📊
+
+The bot provides detailed, actionable trading signals:
+
+```
+🎯 High-Confidence Trading Signals
+
+📈 BUY Opportunities
+**BTCUSDT** (Confidence: 0.85)
+Price: 43250.00
+STRONG BUY Signal (High Confidence)
+Confirmed by: MACD, RSI, BOLLINGER
+- Key Support: 42800
+- Target: 44100 (2%)
+- Stop Loss: 42500 (-1.7%)
+Risk: Medium - Watch for volume confirmation
+
+📉 SELL Opportunities
+**ETHUSDT** (Confidence: 0.82)
+Price: 2250.00
+STRONG SELL Signal (High Confidence)
+Confirmed by: ICHIMOKU, MACD, VOLUME_PROFILE
+- Resistance: 2280
+- Target: 2200 (-2.2%)
+- Stop Loss: 2290 (+1.8%)
+Risk: Low - Multiple strategy confirmation
+```
+
+## AI Integration 🤖
+
+The bot uses two specialized AI models:
+
+### Chat Assistance (google/gemini-flash-1.5-8b)
+- High throughput (191 tokens/sec)
+- 1M context window
+- Multilingual support
+- Cost: $0.15/1M tokens
+- Used for: User interactions and queries
+
+### Signal Analysis (openai/gpt-4-turbo)
+- Superior analytical capabilities
+- Detailed trading insights
+- Risk assessment
+- Cost: $0.4/1M tokens
+- Used for: Signal analysis and recommendations
 
 ## Technical Architecture 🏗️
 

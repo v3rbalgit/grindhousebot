@@ -4,7 +4,7 @@ from os import getenv
 from dotenv import load_dotenv
 
 from clients import BybitClient, BybitWsClient
-from command_handler import CommandHandler
+from handlers.command_handler import CommandHandler
 from utils.logger import logger
 
 load_dotenv()
@@ -51,6 +51,8 @@ class GrindhouseBot(Client):
                     await self.command_handler.handle_listen(message, args)
                 case 'unlisten':
                     await self.command_handler.handle_unlisten(message, args)
+                case 'interval':
+                    await self.command_handler.handle_interval(message, args)
                 case 'top':
                     await self.command_handler.handle_top(message, args)
                 case 'clear':

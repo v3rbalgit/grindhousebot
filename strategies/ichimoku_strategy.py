@@ -41,46 +41,56 @@ class IchimokuStrategy(SignalStrategy):
     def calculate_indicator(self, df: pd.DataFrame) -> Optional[Dict[str, float]]:
         """Calculate Ichimoku components with crypto-optimized settings."""
         try:
-            # Calculate Ichimoku components
+            # Cache DataFrame columns for efficient access
             high = df['high']
             low = df['low']
             close = df['close']
 
-            # Tenkan-sen (Conversion Line)
-            tenkan_high = high.rolling(window=self.tenkan_period).max()
-            tenkan_low = low.rolling(window=self.tenkan_period).min()
-            tenkan = (tenkan_high + tenkan_low) / 2
+            # Calculate components efficiently
+            try:
+                # Tenkan-sen (Conversion Line)
+                tenkan = (high.rolling(window=self.tenkan_period).max() +
+                         low.rolling(window=self.tenkan_period).min()) / 2
 
-            # Kijun-sen (Base Line)
-            kijun_high = high.rolling(window=self.kijun_period).max()
-            kijun_low = low.rolling(window=self.kijun_period).min()
-            kijun = (kijun_high + kijun_low) / 2
+                # Kijun-sen (Base Line)
+                kijun = (high.rolling(window=self.kijun_period).max() +
+                        low.rolling(window=self.kijun_period).min()) / 2
 
-            # Senkou Span A (Leading Span A)
-            senkou_a = ((tenkan + kijun) / 2).shift(self.displacement)
+                # Senkou Span A (Leading Span A)
+                senkou_a = ((tenkan + kijun) / 2).shift(self.displacement)
 
-            # Senkou Span B (Leading Span B)
-            senkou_high = high.rolling(window=self.senkou_period).max()
-            senkou_low = low.rolling(window=self.senkou_period).min()
-            senkou_b = ((senkou_high + senkou_low) / 2).shift(self.displacement)
+                # Senkou Span B (Leading Span B)
+                senkou_b = ((high.rolling(window=self.senkou_period).max() +
+                           low.rolling(window=self.senkou_period).min()) / 2).shift(self.displacement)
 
-            # Chikou Span (Lagging Span)
-            chikou = close.shift(-self.displacement)
+                # Chikou Span (Lagging Span)
+                chikou = close.shift(-self.displacement)
 
-            # Get latest values
-            current_close = float(close.iloc[-1])
-            current_values = {
-                'close': current_close,
-                'tenkan': float(tenkan.iloc[-1]),
-                'kijun': float(kijun.iloc[-1]),
-                'senkou_a': float(senkou_a.iloc[-self.displacement-1]),  # Current cloud
-                'senkou_b': float(senkou_b.iloc[-self.displacement-1]),  # Current cloud
-                'chikou': float(chikou.iloc[-self.displacement-1]) if len(chikou) > self.displacement else None,
-                'future_senkou_a': float(senkou_a.iloc[-1]),  # Future cloud
-                'future_senkou_b': float(senkou_b.iloc[-1])   # Future cloud
-            }
+                # Store calculated values in DataFrame for pattern detection
+                df['tenkan'] = tenkan
+                df['kijun'] = kijun
+                df['senkou_a'] = senkou_a
+                df['senkou_b'] = senkou_b
+                df['chikou'] = chikou
 
-            return current_values
+                # Get latest values efficiently
+                current_close = float(close.iat[-1])
+                current_values = {
+                    'close': current_close,
+                    'tenkan': float(tenkan.iat[-1]),
+                    'kijun': float(kijun.iat[-1]),
+                    'senkou_a': float(senkou_a.iat[-self.displacement-1]),  # Current cloud
+                    'senkou_b': float(senkou_b.iat[-self.displacement-1]),  # Current cloud
+                    'chikou': float(chikou.iat[-self.displacement-1]) if len(chikou.dropna()) > self.displacement else None,
+                    'future_senkou_a': float(senkou_a.iat[-1]),  # Future cloud
+                    'future_senkou_b': float(senkou_b.iat[-1])   # Future cloud
+                }
+
+                return current_values
+
+            except (IndexError, KeyError) as e:
+                logger.error(f"Error accessing Ichimoku values: {e}")
+                return None
 
         except Exception as e:
             logger.error(f"Error calculating Ichimoku: {e}")
@@ -91,7 +101,7 @@ class IchimokuStrategy(SignalStrategy):
         Detect Ichimoku-specific patterns.
 
         Args:
-            df: Price DataFrame
+            df: Price DataFrame with calculated Ichimoku values
             values: Current Ichimoku values
 
         Returns:
@@ -99,32 +109,48 @@ class IchimokuStrategy(SignalStrategy):
         """
         patterns = {}
         try:
-            # TK Cross (Tenkan/Kijun Cross)
-            prev_tenkan = float(df['tenkan'].iloc[-2])
-            prev_kijun = float(df['kijun'].iloc[-2])
+            if len(df) < 2:
+                return patterns
 
+            # Get previous values efficiently
+            try:
+                prev_tenkan = float(df['tenkan'].iat[-2])
+                prev_kijun = float(df['kijun'].iat[-2])
+            except (IndexError, KeyError) as e:
+                logger.error(f"Error accessing previous values: {e}")
+                return patterns
+
+            # TK Cross (Tenkan/Kijun Cross)
             if prev_tenkan < prev_kijun and values['tenkan'] > values['kijun']:
                 patterns['tk_cross_bullish'] = 0.8
             elif prev_tenkan > prev_kijun and values['tenkan'] < values['kijun']:
                 patterns['tk_cross_bearish'] = 0.8
 
-            # Cloud Breakout
-            if values['close'] > max(values['senkou_a'], values['senkou_b']):
+            # Cloud Breakout (with cached values)
+            current_close = values['close']
+            current_senkou_a = values['senkou_a']
+            current_senkou_b = values['senkou_b']
+
+            if current_close > max(current_senkou_a, current_senkou_b):
                 patterns['cloud_breakout_bullish'] = 0.9
-            elif values['close'] < min(values['senkou_a'], values['senkou_b']):
+            elif current_close < min(current_senkou_a, current_senkou_b):
                 patterns['cloud_breakout_bearish'] = 0.9
 
-            # Cloud Twist
-            if values['future_senkou_a'] > values['future_senkou_b'] and values['senkou_a'] < values['senkou_b']:
+            # Cloud Twist (with cached values)
+            future_senkou_a = values['future_senkou_a']
+            future_senkou_b = values['future_senkou_b']
+
+            if future_senkou_a > future_senkou_b and current_senkou_a < current_senkou_b:
                 patterns['cloud_twist_bullish'] = 0.7
-            elif values['future_senkou_a'] < values['future_senkou_b'] and values['senkou_a'] > values['senkou_b']:
+            elif future_senkou_a < future_senkou_b and current_senkou_a > current_senkou_b:
                 patterns['cloud_twist_bearish'] = 0.7
 
             # Chikou Span Cross
             if values['chikou'] is not None:
-                if values['chikou'] > values['close']:
+                chikou = values['chikou']
+                if chikou > current_close:
                     patterns['chikou_cross_bullish'] = 0.6
-                elif values['chikou'] < values['close']:
+                elif chikou < current_close:
                     patterns['chikou_cross_bearish'] = 0.6
 
         except Exception as e:
@@ -153,26 +179,32 @@ class IchimokuStrategy(SignalStrategy):
             # Detect general patterns
             patterns = self.detect_patterns(df)
 
-            # Volume confirmation
-            volume_confirmed = df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]
+            # Volume confirmation (optimized)
+            volume = df['volume']
+            volume_ma = volume.rolling(window=20).mean()
+            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
 
             # Generate signals with multiple confirmations
             signal = None
+            current_close = ichimoku_values['close']
+            kijun = ichimoku_values['kijun']
 
             # Check for potential buy signal
-            if ichimoku_values['close'] > ichimoku_values['kijun']:  # Price above base line
+            if current_close > kijun:  # Price above base line
                 if trend > 0:  # Uptrend confirmation
                     confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'tk_cross_bullish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['tk_cross_bullish'] * 0.2
-                    if 'cloud_breakout_bullish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['cloud_breakout_bullish'] * 0.2
-                    if 'cloud_twist_bullish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['cloud_twist_bullish'] * 0.1
-                    if 'chikou_cross_bullish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['chikou_cross_bullish'] * 0.1
+                    # Add pattern confidence efficiently
+                    for pattern, value in ichimoku_patterns.items():
+                        if pattern.endswith('bullish'):
+                            if pattern.startswith('tk_cross'):
+                                confidence += value * 0.2
+                            elif pattern.startswith('cloud_breakout'):
+                                confidence += value * 0.2
+                            elif pattern.startswith('cloud_twist'):
+                                confidence += value * 0.1
+                            elif pattern.startswith('chikou_cross'):
+                                confidence += value * 0.1
 
                     # Volume confirmation
                     if volume_confirmed:
@@ -182,24 +214,26 @@ class IchimokuStrategy(SignalStrategy):
                         signal = Signal(
                             'ichimoku',
                             SignalType.BUY,
-                            f"TK: {ichimoku_values['tenkan']:.2f}/{ichimoku_values['kijun']:.2f}"
+                            f"TK: {ichimoku_values['tenkan']:.2f}/{kijun:.2f}"
                         )
                         logger.info(f"Buy signal generated with confidence {confidence:.2f}")
 
             # Check for potential sell signal
-            elif ichimoku_values['close'] < ichimoku_values['kijun']:  # Price below base line
+            elif current_close < kijun:  # Price below base line
                 if trend < 0:  # Downtrend confirmation
                     confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'tk_cross_bearish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['tk_cross_bearish'] * 0.2
-                    if 'cloud_breakout_bearish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['cloud_breakout_bearish'] * 0.2
-                    if 'cloud_twist_bearish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['cloud_twist_bearish'] * 0.1
-                    if 'chikou_cross_bearish' in ichimoku_patterns:
-                        confidence += ichimoku_patterns['chikou_cross_bearish'] * 0.1
+                    # Add pattern confidence efficiently
+                    for pattern, value in ichimoku_patterns.items():
+                        if pattern.endswith('bearish'):
+                            if pattern.startswith('tk_cross'):
+                                confidence += value * 0.2
+                            elif pattern.startswith('cloud_breakout'):
+                                confidence += value * 0.2
+                            elif pattern.startswith('cloud_twist'):
+                                confidence += value * 0.1
+                            elif pattern.startswith('chikou_cross'):
+                                confidence += value * 0.1
 
                     # Volume confirmation
                     if volume_confirmed:
@@ -209,7 +243,7 @@ class IchimokuStrategy(SignalStrategy):
                         signal = Signal(
                             'ichimoku',
                             SignalType.SELL,
-                            f"TK: {ichimoku_values['tenkan']:.2f}/{ichimoku_values['kijun']:.2f}"
+                            f"TK: {ichimoku_values['tenkan']:.2f}/{kijun:.2f}"
                         )
                         logger.info(f"Sell signal generated with confidence {confidence:.2f}")
 
