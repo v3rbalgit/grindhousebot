@@ -1,21 +1,13 @@
 import pandas as pd
 import pandas_ta as ta
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from .base import SignalStrategy
 from utils.models import Signal, SignalType
 from utils.logger import logger
 
 
 class MACDStrategy(SignalStrategy):
-    """
-    MACD-based signal generation strategy with dynamic analysis.
-
-    Features:
-    - MACD crossover detection
-    - Trend strength confirmation
-    - Volume analysis
-    - Pattern recognition
-    """
+    """MACD-based signal generation strategy."""
 
     def __init__(self, interval: int = 60, window: int = 100) -> None:
         """
@@ -32,12 +24,12 @@ class MACDStrategy(SignalStrategy):
         """Minimum candles needed for MACD calculation."""
         return 27  # 26 for slow MA + 1 for current candle
 
-    def calculate_indicator(self, df: pd.DataFrame) -> Optional[Tuple[float, float, float]]:
+    def calculate_indicator(self, df: pd.DataFrame) -> Optional[Tuple[float, float, List[float], float]]:
         """
-        Calculate MACD values with additional trend indicators.
+        Calculate MACD values.
 
         Returns:
-            Tuple of (MACD line, Signal line, Histogram) if successful, None otherwise
+            Tuple of (MACD line, Signal line, Recent Histograms, Average Divergence) if successful, None otherwise
         """
         try:
             # Calculate MACD efficiently
@@ -47,15 +39,17 @@ class MACDStrategy(SignalStrategy):
                 return None
 
             try:
-                # Use iat for efficient single value access
+                # Get current values
                 macd_line = float(macd['MACD_12_26_9'].iat[-1])
                 signal_line = float(macd['MACDs_12_26_9'].iat[-1])
-                histogram = float(macd['MACDh_12_26_9'].iat[-1])
 
-                # Store histogram for pattern detection
-                df['MACDh_12_26_9'] = macd['MACDh_12_26_9']
+                # Get recent histogram values for pattern analysis
+                recent_hist = [float(x) for x in macd['MACDh_12_26_9'].tail(5)]
 
-                return macd_line, signal_line, histogram
+                # Calculate average divergence from recent values
+                avg_divergence = abs(macd['MACD_12_26_9'].tail(5).mean() - signal_line)
+
+                return macd_line, signal_line, recent_hist, avg_divergence
 
             except (IndexError, KeyError) as e:
                 logger.error(f"Error accessing MACD values: {e}")
@@ -65,96 +59,97 @@ class MACDStrategy(SignalStrategy):
             logger.error(f"Error calculating MACD: {e}")
             return None
 
-    def analyze_market(self, df: pd.DataFrame, macd_values: Tuple[float, float, float]) -> Optional[Signal]:
+    def analyze_market(self, macd_values: Tuple[float, float, List[float], float]) -> Optional[Signal]:
         """
-        Analyze market conditions using MACD and additional indicators.
+        Generate signal based on MACD with improved confidence scoring.
 
         Args:
-            df: Price DataFrame
-            macd_values: Tuple of (MACD line, Signal line, Histogram)
+            macd_values: Tuple of (MACD line, Signal line, Recent Histograms, Average Divergence)
 
         Returns:
             Signal if conditions are met, None otherwise
         """
         try:
-            macd_line, signal_line, histogram = macd_values
+            macd_line, signal_line, recent_hist, avg_divergence = macd_values
 
-            # Get previous histogram value efficiently
-            try:
-                prev_histogram = float(df['MACDh_12_26_9'].iat[-2])
-            except (IndexError, KeyError) as e:
-                logger.error(f"Error accessing previous histogram: {e}")
-                return None
+            # Check for crossover
+            curr_hist = recent_hist[-1]
+            prev_hist = recent_hist[-2]
 
-            # Calculate market trend
-            trend = self.calculate_market_trend(df)
+            # Calculate histogram strength relative to recent movement
+            hist_max = max(abs(h) for h in recent_hist[:-1])  # Exclude current histogram
+            hist_strength = abs(curr_hist) / hist_max if hist_max > 0 else 0
 
-            # Detect patterns
-            patterns = self.detect_patterns(df)
+            # Check for bullish signal (MACD crosses above signal)
+            if curr_hist > 0 and prev_hist < 0:
+                # Base confidence from divergence
+                # Using 0.01 (1%) as baseline for strong divergence
+                base_confidence = min(avg_divergence / 0.01, 1.0)
 
-            # Volume confirmation (optimized)
-            volume = df['volume']
-            volume_ma = volume.rolling(window=20).mean()
-            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
+                # Histogram strength factor
+                # Strong histogram after crossover indicates stronger momentum
+                strength_factor = min(hist_strength, 1.0)
 
-            # Generate signals with multiple confirmations
-            signal = None
+                # Trend consistency factor
+                # Check if histograms are getting larger (strengthening trend)
+                trend_factor = 1.0
+                if len(recent_hist) >= 3:
+                    if abs(curr_hist) > abs(recent_hist[-2]):  # Growing histogram
+                        trend_factor = 1.2  # 20% bonus
+                    elif abs(curr_hist) < abs(recent_hist[-2]) * 0.5:  # Weakening histogram
+                        trend_factor = 0.8  # 20% penalty
 
-            # Check for bullish signal
-            if histogram > 0 and prev_histogram < 0:  # Bullish crossover
-                if trend > 0:  # Uptrend confirmation
-                    confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
+                # Final confidence calculation
+                final_confidence = min(
+                    (base_confidence * 0.5) +     # Divergence (50%)
+                    (strength_factor * 0.3) +     # Histogram strength (30%)
+                    (trend_factor * 0.2),         # Trend consistency (20%)
+                    1.0
+                )
 
-                    # Add pattern confidence
-                    if 'double_bottom' in patterns:
-                        confidence += patterns['double_bottom'] * 0.2
-                    if 'breakout' in patterns:
-                        confidence += patterns['breakout'] * 0.2
+                signal = Signal(
+                    'macd',
+                    SignalType.BUY,
+                    f"{avg_divergence:.4f}",
+                    final_confidence
+                )
+                logger.info(f"Buy signal generated with MACD divergence {avg_divergence:.4f} (confidence: {final_confidence:.2f})")
+                return signal
 
-                    # Volume confirmation
-                    if volume_confirmed:
-                        confidence += 0.1
+            # Check for bearish signal (MACD crosses below signal)
+            elif curr_hist < 0 and prev_hist > 0:
+                # Base confidence from divergence
+                base_confidence = min(avg_divergence / 0.01, 1.0)
 
-                    # MACD strength confirmation (with safety check)
-                    if signal_line != 0:
-                        macd_strength = abs(macd_line - signal_line) / abs(signal_line)
-                        confidence += min(macd_strength * 0.2, 0.2)
+                # Histogram strength factor
+                strength_factor = min(hist_strength, 1.0)
 
-                    if confidence > 0.7:  # High confidence threshold
-                        signal = Signal(
-                            'macd',
-                            SignalType.BUY,
-                            'bullish crossover'
-                        )
-                        logger.info(f"Buy signal generated with confidence {confidence:.2f}")
+                # Trend consistency factor
+                trend_factor = 1.0
+                if len(recent_hist) >= 3:
+                    if abs(curr_hist) > abs(recent_hist[-2]):  # Growing histogram
+                        trend_factor = 1.2  # 20% bonus
+                    elif abs(curr_hist) < abs(recent_hist[-2]) * 0.5:  # Weakening histogram
+                        trend_factor = 0.8  # 20% penalty
 
-            # Check for bearish signal
-            elif histogram < 0 and prev_histogram > 0:  # Bearish crossover
-                if trend < 0:  # Downtrend confirmation
-                    confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
+                # Final confidence calculation
+                final_confidence = min(
+                    (base_confidence * 0.5) +     # Divergence (50%)
+                    (strength_factor * 0.3) +     # Histogram strength (30%)
+                    (trend_factor * 0.2),         # Trend consistency (20%)
+                    1.0
+                )
 
-                    # Add pattern confidence
-                    if 'volume_spike' in patterns:
-                        confidence += patterns['volume_spike'] * 0.2
+                signal = Signal(
+                    'macd',
+                    SignalType.SELL,
+                    f"{avg_divergence:.4f}",
+                    final_confidence
+                )
+                logger.info(f"Sell signal generated with MACD divergence {avg_divergence:.4f} (confidence: {final_confidence:.2f})")
+                return signal
 
-                    # Volume confirmation
-                    if volume_confirmed:
-                        confidence += 0.1
-
-                    # MACD strength confirmation (with safety check)
-                    if signal_line != 0:
-                        macd_strength = abs(macd_line - signal_line) / abs(signal_line)
-                        confidence += min(macd_strength * 0.2, 0.2)
-
-                    if confidence > 0.7:  # High confidence threshold
-                        signal = Signal(
-                            'macd',
-                            SignalType.SELL,
-                            'bearish crossover'
-                        )
-                        logger.info(f"Sell signal generated with confidence {confidence:.2f}")
-
-            return signal
+            return None
 
         except Exception as e:
             logger.error(f"Error analyzing market: {e}")

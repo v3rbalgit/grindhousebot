@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional
 from dataclasses import dataclass
+import numpy as np
 from utils.models import SignalData, SignalType, StrategyType
 
 
@@ -20,51 +21,34 @@ class SignalHandler:
     # Discord message limit
     DISCORD_CHAR_LIMIT = 2000
     MAX_SIGNALS_PER_MESSAGE = 10
+    MIN_SIGNAL_CONFIDENCE = 0.3
+
+    # Strategy weights lookup table
+    STRATEGY_WEIGHTS = {
+        StrategyType.RSI: 0.32,       # Strong reversal signals
+        StrategyType.ICHIMOKU: 0.27,  # Multiple confirmations
+        StrategyType.MACD: 0.23,      # Good trend change signals
+        StrategyType.BOLLINGER: 0.18  # Volatility-based signals
+    }
+
+    # Signal value description templates
+    SIGNAL_TEMPLATES = {
+        StrategyType.RSI: "RSI {:.0f}",
+        StrategyType.MACD: "MACD Div {:.2%}",
+        StrategyType.BOLLINGER: "BB {:.2%}",
+        StrategyType.ICHIMOKU: "Cloud {:.2%}"
+    }
 
     def __init__(self):
         """Initialize the signal handler."""
-        self.confidence_weights = {
-            StrategyType.RSI: 0.8,           # Strong weight for RSI as it's a reliable indicator
-            StrategyType.MACD: 0.7,          # Good for trend confirmation
-            StrategyType.BOLLINGER: 0.75,    # Effective for volatility-based signals
-            StrategyType.ICHIMOKU: 0.85      # High weight for multiple confirmations
-        }
-        # Increased threshold since we want strong combined signals
-        self.min_confidence_threshold = 0.8
+        # Pre-calculate total weight for normalization
+        self.total_weight = sum(self.STRATEGY_WEIGHTS.values())
 
     def _describe_signal_value(self, signal: SignalData) -> str:
         """Generate a descriptive explanation of the signal value."""
-        if signal.strategy == StrategyType.RSI:
-            # RSI values are 0-100
-            value = float(signal.value)
-            if signal.signal_type == SignalType.BUY:
-                return f"RSI {value:.0f} (Oversold)"
-            else:
-                return f"RSI {value:.0f} (Overbought)"
-
-        elif signal.strategy == StrategyType.MACD:
-            # MACD signals are crossovers
-            if signal.signal_type == SignalType.BUY:
-                return "MACD Bullish Cross"
-            else:
-                return "MACD Bearish Cross"
-
-        elif signal.strategy == StrategyType.BOLLINGER:
-            # Bollinger values are percent_b (position within bands)
-            if signal.signal_type == SignalType.BUY:
-                return "BB Lower Band Test"
-            else:
-                return "BB Upper Band Test"
-
-        elif signal.strategy == StrategyType.ICHIMOKU:
-            # Ichimoku signals include TK values
-            if "TK:" in str(signal.value):
-                return "Ichimoku TK Cross"
-            elif signal.signal_type == SignalType.BUY:
-                return "Price Above Cloud"
-            else:
-                return "Price Below Cloud"
-
+        template = self.SIGNAL_TEMPLATES.get(signal.strategy)
+        if template:
+            return template.format(float(signal.value))
         return str(signal.value)
 
     def aggregate_signals(self, signals: Dict[str, Dict[StrategyType, SignalData]]) -> List[AggregatedSignal]:
@@ -77,34 +61,32 @@ class SignalHandler:
         Returns:
             List of aggregated signals, sorted by confidence
         """
-        aggregated_signals: List[AggregatedSignal] = []
+        aggregated_signals = []
 
         for symbol, strategy_signals in signals.items():
             if not strategy_signals:
                 continue
 
-            # Group signals by type (BUY/SELL)
+            # Filter and group signals by type
             buy_signals = []
             sell_signals = []
 
-            for strategy_type, signal in strategy_signals.items():
-                if signal.signal_type == SignalType.BUY:
-                    buy_signals.append(signal)
-                else:
-                    sell_signals.append(signal)
+            for signal in strategy_signals.values():
+                if signal.confidence >= self.MIN_SIGNAL_CONFIDENCE:
+                    if signal.signal_type == SignalType.BUY:
+                        buy_signals.append(signal)
+                    else:
+                        sell_signals.append(signal)
 
-            # Process buy signals
-            if buy_signals:
-                agg_signal = self._create_aggregated_signal(buy_signals, SignalType.BUY)
-                if agg_signal:
-                    aggregated_signals.append(agg_signal)
+            # Process buy and sell signals
+            for signal_group in (buy_signals, sell_signals):
+                if signal_group:
+                    signal_type = signal_group[0].signal_type
+                    agg_signal = self._create_aggregated_signal(signal_group, signal_type)
+                    if agg_signal:
+                        aggregated_signals.append(agg_signal)
 
-            # Process sell signals
-            if sell_signals:
-                agg_signal = self._create_aggregated_signal(sell_signals, SignalType.SELL)
-                if agg_signal:
-                    aggregated_signals.append(agg_signal)
-
+        # Sort by confidence once at the end
         return sorted(aggregated_signals, key=lambda x: x.confidence, reverse=True)
 
     def _create_aggregated_signal(self, signals: List[SignalData], signal_type: SignalType) -> Optional[AggregatedSignal]:
@@ -112,30 +94,29 @@ class SignalHandler:
         if not signals:
             return None
 
-        # Calculate combined confidence
-        total_weight = 0
-        weighted_confidence = 0
+        # Calculate weighted confidence efficiently
+        confidences = np.array([signal.confidence for signal in signals])
+        weights = np.array([self.STRATEGY_WEIGHTS.get(signal.strategy, 0.18) for signal in signals])
 
-        for signal in signals:
-            weight = self.confidence_weights.get(signal.strategy, 0.5)
-            total_weight += weight
-            weighted_confidence += weight
+        # Calculate base confidence
+        weighted_confidence = np.sum(confidences * weights) / self.total_weight
 
-        if total_weight == 0:
-            return None
+        # Apply agreement bonus if multiple signals
+        if len(signals) > 1:
+            # Scale bonus by average confidence
+            bonus = min((len(signals) - 1) * 0.1, 0.2) * np.mean(confidences)
+            weighted_confidence *= (1 + bonus)
 
-        confidence = weighted_confidence / total_weight
+        # Ensure confidence is between 0 and 1
+        final_confidence = float(min(weighted_confidence, 1.0))
 
-        # Only create signal if confidence meets higher threshold
-        if confidence < self.min_confidence_threshold:
-            return None
-
+        # Get latest signal for timestamp and price
         latest_signal = max(signals, key=lambda x: x.timestamp)
 
         return AggregatedSignal(
             symbol=latest_signal.symbol,
             signal_type=signal_type,
-            confidence=confidence,
+            confidence=final_confidence,
             price=latest_signal.price,
             timestamp=latest_signal.timestamp,
             supporting_signals=signals
@@ -143,27 +124,24 @@ class SignalHandler:
 
     def _format_signal_batch(self, signals: List[AggregatedSignal], header: str = "") -> List[str]:
         """Format a batch of signals into message chunks."""
-        messages = []
+        messages: List[str] = []
         current_message = [header] if header else []
 
         for signal in signals:
-            # Format signal message
+            # Pre-format indicator details
+            indicators = [self._describe_signal_value(s) for s in signal.supporting_signals]
+
+            url = f"https://www.bybit.com/trade/usdt/{signal.symbol}"
+
+            # Build signal message
             signal_msg = [
-                f"**{signal.symbol}** ({signal.confidence:.2f})",
-                f"Price: {signal.price}"
+                f"[🌐]({url}) **{signal.symbol}** ({int(signal.confidence * 100)}% confidence)",
+                f"Price: {signal.price}",
+                " | ".join(indicators),
+                ""  # Empty line for spacing
             ]
 
-            # Add indicator details
-            indicators = []
-            for s in signal.supporting_signals:
-                desc = self._describe_signal_value(s)
-                indicators.append(desc)
-
-            if indicators:
-                signal_msg.append(" | ".join(indicators))
-            signal_msg.append("")  # Empty line for spacing
-
-            # Check if adding this signal would exceed limit
+            # Check message length
             potential_msg = "\n".join(current_message + signal_msg)
             if len(potential_msg) > self.DISCORD_CHAR_LIMIT and current_message:
                 messages.append("\n".join(current_message))
@@ -181,24 +159,23 @@ class SignalHandler:
         if not signals:
             return ["No significant trading signals at this time."]
 
-        # Sort all signals by confidence first
-        sorted_signals = sorted(signals, key=lambda x: x.confidence, reverse=True)
-
-        # Take top signals up to limit
-        top_signals = sorted_signals[:self.MAX_SIGNALS_PER_MESSAGE]
-
-        # Group by signal type
+        # Take top signals up to limit and group by type
+        top_signals = signals[:self.MAX_SIGNALS_PER_MESSAGE]
         buy_signals = [s for s in top_signals if s.signal_type == SignalType.BUY]
         sell_signals = [s for s in top_signals if s.signal_type == SignalType.SELL]
 
-        messages = []
+        messages: List[str] = []
 
         if buy_signals:
-            header = "🎯 **High-Confidence Trading Signals**\n\n📈 **BUY Signals**"
-            messages.extend(self._format_signal_batch(buy_signals, header))
+            messages.extend(self._format_signal_batch(
+                buy_signals,
+                "🎯 **High-Confidence Trading Signals**\n\n📈 **BUY Signals**"
+            ))
 
         if sell_signals:
-            header = "📉 **SELL Signals**"
-            messages.extend(self._format_signal_batch(sell_signals, header))
+            messages.extend(self._format_signal_batch(
+                sell_signals,
+                "📉 **SELL Signals**"
+            ))
 
         return messages

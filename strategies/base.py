@@ -1,21 +1,12 @@
 from abc import ABC, abstractmethod
 import pandas as pd
-import pandas_ta as ta
-from typing import Dict, Optional, Any, Tuple
+from typing import Dict, Optional, Any
 from utils.models import PriceData, Signal
 from utils.logger import logger
 
 
 class SignalStrategy(ABC):
-    """
-    Abstract base class for signal generation strategies.
-
-    Features:
-    - Dynamic threshold calculation
-    - Market trend analysis
-    - Pattern recognition
-    - Adaptive signal generation
-    """
+    """Abstract base class for signal generation strategies."""
 
     def __init__(self, interval: int, window: int) -> None:
         """
@@ -94,122 +85,6 @@ class SignalStrategy(ABC):
         self.dataframes.clear()
         logger.debug(f"Cleared {count} DataFrames from memory")
 
-    def calculate_market_trend(self, df: pd.DataFrame) -> float:
-        """
-        Calculate the overall market trend using multiple indicators.
-
-        Args:
-            df: Price DataFrame
-
-        Returns:
-            Trend strength (-1 to 1, where -1 is strong downtrend, 1 is strong uptrend)
-        """
-        try:
-            if len(df) < 50:  # Need at least 50 candles for reliable EMAs
-                return 0
-
-            # Calculate EMAs for trend direction
-            close = df['close']
-            ema20 = ta.ema(close, length=20)
-            ema50 = ta.ema(close, length=50)
-
-            # Calculate ADX for trend strength
-            adx = ta.adx(df['high'], df['low'], close)
-
-            # Check for None values
-            if ema20 is None or ema50 is None or adx is None:
-                return 0
-
-            # Get latest values efficiently
-            try:
-                ema20_last = float(ema20.iat[-1])
-                ema50_last = float(ema50.iat[-1])
-                adx_last = float(adx['ADX_14'].iat[-1])
-            except (IndexError, KeyError, ValueError):
-                return 0
-
-            # Calculate trend
-            ema_trend = 1 if ema20_last > ema50_last else -1
-            adx_strength = min(adx_last / 100, 1)  # Normalize to 0-1
-
-            # Combine signals
-            return ema_trend * adx_strength
-
-        except Exception as e:
-            logger.error(f"Error calculating market trend: {e}")
-            return 0
-
-    def detect_patterns(self, df: pd.DataFrame) -> Dict[str, float]:
-        """
-        Detect common chart patterns.
-
-        Args:
-            df: Price DataFrame
-
-        Returns:
-            Dictionary of pattern names to confidence levels (0-1)
-        """
-        patterns = {}
-        try:
-            # Cache common calculations
-            close = df['close']
-            high = df['high']
-            low = df['low']
-            volume = df['volume']
-
-            # Double Bottom (optimized)
-            if len(df) >= 20:
-                lows_5min = low.rolling(window=5).min()
-                if len(lows_5min.unique()) >= 2:
-                    recent_lows = lows_5min.tail(20)
-                    min_val = recent_lows.min()
-                    min_points = recent_lows[recent_lows == min_val].index
-                    if len(min_points) >= 2:
-                        patterns['double_bottom'] = 0.8
-
-            # Breakout (optimized)
-            if len(df) >= 10:
-                high_10max = high.rolling(window=10).max()
-                if close.iat[-1] > high_10max.iat[-1]:
-                    patterns['breakout'] = 0.9
-
-            # Volume Spike (optimized)
-            if len(df) >= 5:
-                vol_5avg = volume.rolling(window=5).mean()
-                if volume.iat[-1] > vol_5avg.iat[-1] * 2:
-                    patterns['volume_spike'] = 0.7
-
-        except Exception as e:
-            logger.error(f"Error detecting patterns: {e}")
-
-        return patterns
-
-    def calculate_dynamic_thresholds(self, df: pd.DataFrame) -> Tuple[float, float]:
-        """
-        Calculate dynamic thresholds based on market conditions.
-
-        Args:
-            df: Price DataFrame
-
-        Returns:
-            Tuple of (lower_threshold, upper_threshold)
-        """
-        try:
-            # Calculate volatility efficiently
-            close = df['close']
-            returns = (close - close.shift(1)) / close.shift(1)  # More efficient than pct_change()
-            volatility = returns.std()
-
-            # Adjust thresholds based on volatility
-            volatility_factor = min(volatility * 100, 1)  # Cap at 100%
-            threshold_adjustment = 10 * volatility_factor
-
-            return 30 - threshold_adjustment, 70 + threshold_adjustment
-
-        except Exception as e:
-            logger.error(f"Error calculating dynamic thresholds: {e}")
-            return 30, 70  # Default values
-
     @property
     @abstractmethod
     def min_candles(self) -> int:
@@ -230,12 +105,11 @@ class SignalStrategy(ABC):
         pass
 
     @abstractmethod
-    def analyze_market(self, df: pd.DataFrame, indicator_value: Any) -> Optional[Signal]:
+    def analyze_market(self, indicator_value: Any) -> Optional[Signal]:
         """
         Analyze market conditions and generate signal.
 
         Args:
-            df: Price DataFrame
             indicator_value: Current indicator value(s)
 
         Returns:
@@ -262,7 +136,7 @@ class SignalStrategy(ABC):
                 return None
 
             # Analyze market
-            return self.analyze_market(df, indicator_value)
+            return self.analyze_market(indicator_value)
 
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")

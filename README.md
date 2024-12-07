@@ -17,35 +17,110 @@ A powerful Discord bot for cryptocurrency trading signals and real-time market m
 - Multi-strategy signal monitoring
 - Combined confidence scoring system
 
-## Trading Strategies 📈
+## Signalling Strategies 📈
 
 ### RSI Strategy
-- Dynamic thresholds adapting to market volatility
-- Multi-factor confirmation with trend and volume
-- Pattern recognition for stronger signals
-- Confidence-based signal generation
-- Requires minimum 15 candles for signal generation
+- Oversold/Overbought detection
+- Confidence based on RSI extremes
+- RSI < 30: Buy signal (stronger as RSI decreases)
+- RSI > 70: Sell signal (stronger as RSI increases)
 
 ### MACD Strategy
-- Enhanced crossover detection with trend strength measurement
-- Multiple timeframe confirmation
-- Volume-validated signals
-- Uses standard settings (12/26/9)
-- Requires minimum 27 candles for signal generation
+- Divergence-based signals
+- Uses 5-period average divergence
+- Crossover confirmation required
+- Confidence based on divergence strength
 
 ### Bollinger Bands Strategy
-- Dynamic volatility-based bands
-- Squeeze breakout detection
-- Multiple pattern recognition
-- Volume-confirmed signals
-- Requires minimum 20 candles for signal generation
+- Band penetration signals
+- Confidence based on penetration depth
+- Normalized by band width
+- Adapts to market volatility
 
-### Ichimoku Cloud Strategy (Crypto-Optimized)
-- Custom periods optimized for crypto (20/60/120/30)
-- Cloud breakout detection
-- TK cross validation
-- Multiple confirmation factors
-- Requires minimum 120 candles for signal generation
+### Ichimoku Strategy
+- Cloud position signals
+- TK cross confirmation
+- Weighted confidence calculation:
+  * 40%: Distance from cloud
+  * 30%: TK cross strength
+  * 30%: Cloud thickness
+
+## Signal Confidence
+
+Signals combine multiple factors:
+1. Individual strategy confidence (0.0-1.0)
+2. Strategy weights:
+   - RSI: 32% (strong reversal signals)
+   - Ichimoku: 27% (multiple confirmations)
+   - MACD: 23% (trend signals)
+   - Bollinger: 18% (volatility signals)
+
+### Strategy-Specific Confidence Scoring
+
+Each strategy uses optimized confidence calculations:
+
+#### Bollinger Bands
+- Base confidence from band penetration depth
+- Adjusts for current volatility using band width
+- Considers distance from middle band for trend context
+- Weighted scoring: 70% band penetration + 30% trend context
+
+#### RSI
+- Base confidence from distance to extremes
+- Includes momentum (rate of change) consideration
+- Bonus confidence for extreme levels (RSI < 20 or > 80)
+- Weighted scoring: 60% RSI level + 40% momentum, with up to 10% extreme bonus
+
+#### MACD
+- Base confidence from divergence strength
+- Considers histogram strength vs recent movements
+- Includes trend consistency factor
+- Weighted scoring: 50% divergence + 30% histogram strength + 20% trend consistency
+
+#### Ichimoku
+- Measures cloud and TK cross relative to recent price range
+- Considers cloud thickness for trend strength
+- Weighted scoring: 45% price position + 35% TK cross strength + 20% cloud strength
+
+### Signal Aggregation
+
+The signal handler implements several optimizations for efficient signal processing:
+
+1. Minimum Confidence Threshold
+   - Signals below 0.3 confidence are filtered out
+   - Reduces noise and improves signal quality
+
+2. Agreement Bonus
+   - Up to 20% bonus for multiple confirming signals
+   - Bonus scaled by average confidence of agreeing signals
+   - Rewards strong consensus across strategies
+
+3. Dynamic Weight Adjustment
+   - Base weights adjusted based on signal strength
+   - Normalized to maintain consistent scaling
+   - Prioritizes strongest signals in current conditions
+
+[Rest of the README content remains the same...]
+
+## Performance Optimizations 🚀
+
+### Technical Indicators
+- Uses pandas_ta for efficient indicator calculations
+  * Optimized with Cython for high performance
+  * Efficient memory usage for rolling windows
+  * Vectorized operations for speed
+
+### Signal Processing
+- Numpy-based confidence calculations
+- Efficient signal aggregation using vectorized operations
+- Pre-calculated lookup tables for weights and templates
+- Optimized string formatting for Discord messages
+
+### Memory Management
+- Efficient DataFrame management
+- Smart window sizes for each strategy
+- Minimal data copying in signal processing
+- Optimized message batching for Discord
 
 ## Installation 🚀
 
@@ -168,25 +243,15 @@ The bot provides detailed, actionable trading signals:
 ```
 🎯 High-Confidence Trading Signals
 
-📈 BUY Opportunities
-**BTCUSDT** (Confidence: 0.85)
-Price: 43250.00
-STRONG BUY Signal (High Confidence)
-Confirmed by: MACD, RSI, BOLLINGER
-- Key Support: 42800
-- Target: 44100 (2%)
-- Stop Loss: 42500 (-1.7%)
-Risk: Medium - Watch for volume confirmation
+📈 BUY Signals
+**BTCUSDT** (0.85)
+Price: 43250
+RSI 28 | MACD Div 1.20% | BB 2.50%
 
-📉 SELL Opportunities
-**ETHUSDT** (Confidence: 0.82)
-Price: 2250.00
-STRONG SELL Signal (High Confidence)
-Confirmed by: ICHIMOKU, MACD, RSI
-- Resistance: 2280
-- Target: 2200 (-2.2%)
-- Stop Loss: 2290 (+1.8%)
-Risk: Low - Multiple strategy confirmation
+📉 SELL Signals
+**ETHUSDT** (0.92)
+Price: 2250
+RSI 75 | Cloud 2.10% | BB 1.80%
 ```
 
 ## AI Integration 🤖

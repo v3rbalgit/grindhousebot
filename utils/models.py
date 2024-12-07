@@ -26,6 +26,7 @@ class Signal:
     name: str
     type: str
     value: Union[float, str]
+    confidence: float = 0.0  # Signal strength 0.0-1.0
 
 
 @dataclass(slots=True)
@@ -83,6 +84,7 @@ class SignalData(BaseModel):
     value: Union[float, str]
     timestamp: int
     price: float
+    confidence: float = Field(0.0, description="Signal strength 0.0-1.0")
 
 
 # Command Models

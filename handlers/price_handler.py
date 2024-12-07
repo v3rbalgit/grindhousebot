@@ -257,7 +257,8 @@ class PriceHandler:
                         signal_type=SignalType(signal.type),
                         value=signal.value,
                         timestamp=latest_price.timestamp,
-                        price=latest_price.close
+                        price=latest_price.close,
+                        confidence=signal.confidence  # Include signal confidence
                     )
 
                     # Store signal
