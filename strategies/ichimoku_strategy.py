@@ -1,5 +1,4 @@
 import pandas as pd
-import pandas_ta as ta
 from typing import Optional, Dict
 from .base import SignalStrategy
 from utils.models import Signal, SignalType

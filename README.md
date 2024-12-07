@@ -47,20 +47,6 @@ A powerful Discord bot for cryptocurrency trading signals and real-time market m
 - Multiple confirmation factors
 - Requires minimum 120 candles for signal generation
 
-### Harmonic Pattern Strategy
-- Multiple pattern types (Gartley, Butterfly, Bat, Crab)
-- Fibonacci ratio validation with crypto-adapted tolerance
-- Pattern completion confidence scoring
-- Trend alignment checks
-- Requires minimum 30 candles for signal generation
-
-### Volume Profile Strategy
-- Volume distribution analysis
-- High/Low volume node detection
-- Price acceptance/rejection patterns
-- POC and Value Area signals
-- Requires minimum 50 candles for signal generation
-
 ## Installation 🚀
 
 ### Standard Installation
@@ -75,6 +61,7 @@ A powerful Discord bot for cryptocurrency trading signals and real-time market m
 3. Install dependencies:
    ```bash
    pip install -r requirements.txt
+   pip install -U git+https://github.com/twopirllc/pandas-ta.git@development
    ```
 4. Create a `.env` file with your credentials:
    ```
@@ -125,7 +112,7 @@ Choose an interval that matches your trading strategy. For example:
 ## Commands 💬
 
 - `!listen <strategies>` - Start monitoring for trading signals
-  - Available strategies: `rsi`, `macd`, `bollinger`, `ichimoku`, `harmonic`, `volume_profile`
+  - Available strategies: `rsi`, `macd`, `bollinger`, `ichimoku`
   - Use comma-separated values for multiple strategies: `!listen rsi,macd,bollinger`
   - Use `all` to enable all strategies: `!listen all`
   - Examples:
@@ -195,7 +182,7 @@ Risk: Medium - Watch for volume confirmation
 **ETHUSDT** (Confidence: 0.82)
 Price: 2250.00
 STRONG SELL Signal (High Confidence)
-Confirmed by: ICHIMOKU, MACD, VOLUME_PROFILE
+Confirmed by: ICHIMOKU, MACD, RSI
 - Resistance: 2280
 - Target: 2200 (-2.2%)
 - Stop Loss: 2290 (+1.8%)
@@ -212,13 +199,6 @@ The bot uses two specialized AI models:
 - Multilingual support
 - Cost: $0.15/1M tokens
 - Used for: User interactions and queries
-
-### Signal Analysis (openai/gpt-4-turbo)
-- Superior analytical capabilities
-- Detailed trading insights
-- Risk assessment
-- Cost: $0.4/1M tokens
-- Used for: Signal analysis and recommendations
 
 ## Technical Architecture 🏗️
 
@@ -251,8 +231,6 @@ The bot uses a factory pattern for strategy management:
    - MACD with enhanced crossover detection
    - Bollinger Bands with squeeze detection
    - Ichimoku Cloud with crypto-optimized settings
-   - Harmonic Patterns with Fibonacci validation
-   - Volume Profile with node detection
 
 ### Signal Generation Process
 

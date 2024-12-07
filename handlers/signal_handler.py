@@ -1,8 +1,6 @@
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from utils.models import SignalData, SignalType, StrategyType
-from utils.logger import logger
-from clients.openrouter_client import OpenRouterClient
 
 
 @dataclass
@@ -14,31 +12,60 @@ class AggregatedSignal:
     price: float
     timestamp: int
     supporting_signals: List[SignalData]
-    analysis: str
 
 
 class SignalHandler:
-    """
-    Handles aggregation and analysis of trading signals across multiple strategies.
+    """Handles aggregation and analysis of trading signals."""
 
-    Features:
-    - Signal aggregation across strategies
-    - Confidence score calculation
-    - Signal ranking and filtering
-    - AI-enhanced signal analysis
-    """
+    # Discord message limit
+    DISCORD_CHAR_LIMIT = 2000
+    MAX_SIGNALS_PER_MESSAGE = 10
 
-    def __init__(self, openrouter_client: Optional[OpenRouterClient] = None):
+    def __init__(self):
         """Initialize the signal handler."""
-        self.openrouter_client = openrouter_client
         self.confidence_weights = {
             StrategyType.RSI: 0.8,           # Strong weight for RSI as it's a reliable indicator
             StrategyType.MACD: 0.7,          # Good for trend confirmation
             StrategyType.BOLLINGER: 0.75,    # Effective for volatility-based signals
-            StrategyType.ICHIMOKU: 0.85,     # High weight for multiple confirmations
-            StrategyType.VOLUME_PROFILE: 0.6  # Support/resistance levels
+            StrategyType.ICHIMOKU: 0.85      # High weight for multiple confirmations
         }
-        self.min_confidence_threshold = 0.7   # Minimum confidence to generate a signal
+        # Increased threshold since we want strong combined signals
+        self.min_confidence_threshold = 0.8
+
+    def _describe_signal_value(self, signal: SignalData) -> str:
+        """Generate a descriptive explanation of the signal value."""
+        if signal.strategy == StrategyType.RSI:
+            # RSI values are 0-100
+            value = float(signal.value)
+            if signal.signal_type == SignalType.BUY:
+                return f"RSI {value:.0f} (Oversold)"
+            else:
+                return f"RSI {value:.0f} (Overbought)"
+
+        elif signal.strategy == StrategyType.MACD:
+            # MACD signals are crossovers
+            if signal.signal_type == SignalType.BUY:
+                return "MACD Bullish Cross"
+            else:
+                return "MACD Bearish Cross"
+
+        elif signal.strategy == StrategyType.BOLLINGER:
+            # Bollinger values are percent_b (position within bands)
+            if signal.signal_type == SignalType.BUY:
+                return "BB Lower Band Test"
+            else:
+                return "BB Upper Band Test"
+
+        elif signal.strategy == StrategyType.ICHIMOKU:
+            # Ichimoku signals include TK values
+            if "TK:" in str(signal.value):
+                return "Ichimoku TK Cross"
+            elif signal.signal_type == SignalType.BUY:
+                return "Price Above Cloud"
+            else:
+                return "Price Below Cloud"
+
+        return str(signal.value)
 
     def aggregate_signals(self, signals: Dict[str, Dict[StrategyType, SignalData]]) -> List[AggregatedSignal]:
         """
@@ -78,11 +105,10 @@ class SignalHandler:
                 if agg_signal:
                     aggregated_signals.append(agg_signal)
 
-        # Sort by confidence score
         return sorted(aggregated_signals, key=lambda x: x.confidence, reverse=True)
 
     def _create_aggregated_signal(self, signals: List[SignalData], signal_type: SignalType) -> Optional[AggregatedSignal]:
-        """Create an aggregated signal from a list of signals of the same type."""
+        """Create an aggregated signal from a list of signals."""
         if not signals:
             return None
 
@@ -100,11 +126,10 @@ class SignalHandler:
 
         confidence = weighted_confidence / total_weight
 
-        # Only create signal if confidence meets threshold
+        # Only create signal if confidence meets higher threshold
         if confidence < self.min_confidence_threshold:
             return None
 
-        # Use the most recent signal's price and timestamp
         latest_signal = max(signals, key=lambda x: x.timestamp)
 
         return AggregatedSignal(
@@ -113,101 +138,67 @@ class SignalHandler:
             confidence=confidence,
             price=latest_signal.price,
             timestamp=latest_signal.timestamp,
-            supporting_signals=signals,
-            analysis=""  # Will be filled by generate_analysis
+            supporting_signals=signals
         )
 
-    async def generate_analysis(self, signal: AggregatedSignal) -> str:
-        """Generate a detailed analysis of the trading signal."""
-        try:
-            if not self.openrouter_client:
-                return self._generate_basic_analysis(signal)
+    def _format_signal_batch(self, signals: List[AggregatedSignal], header: str = "") -> List[str]:
+        """Format a batch of signals into message chunks."""
+        messages = []
+        current_message = [header] if header else []
 
-            # Prepare signal information for AI analysis
-            signal_info = self._prepare_signal_info(signal)
+        for signal in signals:
+            # Format signal message
+            signal_msg = [
+                f"**{signal.symbol}** ({signal.confidence:.2f})",
+                f"Price: {signal.price}"
+            ]
 
-            # Generate prompt for AI
-            prompt = f"""Analyze this trading signal and provide a concise, professional analysis:
+            # Add indicator details
+            indicators = []
+            for s in signal.supporting_signals:
+                desc = self._describe_signal_value(s)
+                indicators.append(desc)
 
-Symbol: {signal.symbol}
-Signal Type: {signal.signal_type.value}
-Confidence: {signal.confidence:.2f}
-Current Price: {signal.price}
+            if indicators:
+                signal_msg.append(" | ".join(indicators))
+            signal_msg.append("")  # Empty line for spacing
 
-Supporting Signals:
-{signal_info}
+            # Check if adding this signal would exceed limit
+            potential_msg = "\n".join(current_message + signal_msg)
+            if len(potential_msg) > self.DISCORD_CHAR_LIMIT and current_message:
+                messages.append("\n".join(current_message))
+                current_message = [header] if header else []
 
-Provide a brief, clear trading recommendation including:
-1. Key reasons for the signal
-2. Important price levels to watch
-3. Potential risks
-4. Suggested stop loss and take profit levels (% based)
-"""
+            current_message.extend(signal_msg)
 
-            # Get AI analysis
-            response = await self.openrouter_client.generate_text(prompt)
-            return response if response else self._generate_basic_analysis(signal)
+        if current_message:
+            messages.append("\n".join(current_message))
 
-        except Exception as e:
-            logger.error(f"Error generating analysis: {e}")
-            return self._generate_basic_analysis(signal)
+        return messages
 
-    def _prepare_signal_info(self, signal: AggregatedSignal) -> str:
-        """Prepare signal information for analysis."""
-        info = []
-        for s in signal.supporting_signals:
-            value = f"{s.value:.2f}" if isinstance(s.value, (int, float)) else s.value
-            info.append(f"- {s.strategy.value.upper()}: {value}")
-        return "\n".join(info)
-
-    def _generate_basic_analysis(self, signal: AggregatedSignal) -> str:
-        """Generate a basic analysis when AI is not available."""
-        signal_type = "STRONG BUY" if signal.signal_type == SignalType.BUY else "STRONG SELL"
-        confidence_text = "High" if signal.confidence > 0.8 else "Medium"
-
-        supporting_strategies = [s.strategy.value.upper() for s in signal.supporting_signals]
-
-        return (
-            f"{signal_type} Signal ({confidence_text} Confidence: {signal.confidence:.2f})\n"
-            f"Confirmed by: {', '.join(supporting_strategies)}\n"
-            f"Current Price: {signal.price:.8f}"
-        )
-
-    async def format_discord_message(self, signals: List[AggregatedSignal]) -> str:
-        """Format signals for Discord message."""
+    async def format_discord_message(self, signals: List[AggregatedSignal]) -> List[str]:
+        """Format signals into Discord messages."""
         if not signals:
-            return "No significant trading signals at this time."
+            return ["No significant trading signals at this time."]
 
-        message = ["🎯 **High-Confidence Trading Signals**\n"]
+        # Sort all signals by confidence first
+        sorted_signals = sorted(signals, key=lambda x: x.confidence, reverse=True)
 
-        # Group signals by type
-        buy_signals = [s for s in signals if s.signal_type == SignalType.BUY]
-        sell_signals = [s for s in signals if s.signal_type == SignalType.SELL]
+        # Take top signals up to limit
+        top_signals = sorted_signals[:self.MAX_SIGNALS_PER_MESSAGE]
 
-        # Format buy signals
+        # Group by signal type
+        buy_signals = [s for s in top_signals if s.signal_type == SignalType.BUY]
+        sell_signals = [s for s in top_signals if s.signal_type == SignalType.SELL]
+
+        messages = []
+
         if buy_signals:
-            message.append("📈 **BUY Opportunities**")
-            for signal in buy_signals:
-                # Generate analysis for each signal
-                analysis = await self.generate_analysis(signal)
-                message.extend([
-                    f"**{signal.symbol}** (Confidence: {signal.confidence:.2f})",
-                    f"Price: {signal.price:.8f}",
-                    f"{analysis}",
-                    ""  # Empty line for spacing
-                ])
+            header = "🎯 **High-Confidence Trading Signals**\n\n📈 **BUY Signals**"
+            messages.extend(self._format_signal_batch(buy_signals, header))
 
-        # Format sell signals
         if sell_signals:
-            message.append("📉 **SELL Opportunities**")
-            for signal in sell_signals:
-                # Generate analysis for each signal
-                analysis = await self.generate_analysis(signal)
-                message.extend([
-                    f"**{signal.symbol}** (Confidence: {signal.confidence:.2f})",
-                    f"Price: {signal.price:.8f}",
-                    f"{analysis}",
-                    ""  # Empty line for spacing
-                ])
+            header = "📉 **SELL Signals**"
+            messages.extend(self._format_signal_batch(sell_signals, header))
 
-        return "\n".join(message)
+        return messages

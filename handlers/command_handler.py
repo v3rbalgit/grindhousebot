@@ -22,7 +22,7 @@ class CommandHandler:
         self.bybit_client = bybit_client
         self.bybit_ws_client = bybit_ws_client
         self.price_handler: Optional[PriceHandler] = None
-        self.chat_client = OpenRouterClient()  # Used for both chat and signal analysis
+        self.chat_client = OpenRouterClient()  # Used for chat functionality
         self.current_interval = DEFAULT_INTERVAL
 
     async def handle_interval(self, message: Message, args: str) -> None:
@@ -71,7 +71,6 @@ class CommandHandler:
                 self.price_handler = PriceHandler(
                     message=message,
                     bybit_client=self.bybit_client,
-                    openrouter_client=self.chat_client,
                     interval=new_interval
                 )
 
@@ -249,11 +248,10 @@ class CommandHandler:
         """
         try:
             if not self.price_handler:
-                # Initialize price handler with first strategy and OpenRouterClient
+                # Initialize price handler without OpenRouter client
                 self.price_handler = PriceHandler(
                     message=message,
                     bybit_client=self.bybit_client,
-                    openrouter_client=self.chat_client,  # Pass the same OpenRouterClient instance
                     interval=self.current_interval
                 )
 

@@ -4,8 +4,6 @@ from .rsi_strategy import RSIStrategy
 from .macd_strategy import MACDStrategy
 from .bollinger_strategy import BollingerStrategy
 from .ichimoku_strategy import IchimokuStrategy
-from .harmonic_strategy import HarmonicStrategy
-from .volume_profile_strategy import VolumeProfileStrategy
 from utils.models import StrategyType, SignalConfig
 from utils.logger import logger
 
@@ -17,9 +15,7 @@ class StrategyFactory:
         StrategyType.RSI: RSIStrategy,
         StrategyType.MACD: MACDStrategy,
         StrategyType.BOLLINGER: BollingerStrategy,
-        StrategyType.ICHIMOKU: IchimokuStrategy,
-        StrategyType.HARMONIC: HarmonicStrategy,
-        StrategyType.VOLUME_PROFILE: VolumeProfileStrategy
+        StrategyType.ICHIMOKU: IchimokuStrategy
     }
 
     @classmethod

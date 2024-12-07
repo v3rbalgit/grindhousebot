@@ -4,7 +4,7 @@ from typing import Dict, List, Set, Optional
 from discord import Message
 from collections import deque
 from utils.models import PriceData, SignalData, SignalConfig, StrategyType, SignalType
-from clients import BybitClient, OpenRouterClient
+from clients import BybitClient
 from strategies import StrategyFactory
 from handlers.signal_handler import SignalHandler
 from utils.logger import logger
@@ -16,12 +16,11 @@ class PriceHandler:
     Handles price data processing and signal generation.
     """
 
-    FIXED_WINDOW_SIZE = 150
+    WINDOW_SIZE = 150
 
     def __init__(self,
                  message: Message,
                  bybit_client: BybitClient,
-                 openrouter_client: Optional[OpenRouterClient] = None,
                  interval: Optional[str] = None) -> None:
         """
         Initialize the price handler.
@@ -29,7 +28,6 @@ class PriceHandler:
         Args:
         message: Discord message for sending responses
         bybit_client: Async Bybit client
-        openrouter_client: OpenRouter client for AI-enhanced analysis
         interval: Optional interval override (e.g., '1', '5', '15', '60', etc.)
         """
         self.message = message
@@ -44,7 +42,7 @@ class PriceHandler:
         self._running = True
 
         # Initialize signal handler
-        self.signal_handler = SignalHandler(openrouter_client)
+        self.signal_handler = SignalHandler()
 
         # Signal batching
         self._updated_symbols: Set[str] = set()
@@ -72,7 +70,7 @@ class PriceHandler:
         config = SignalConfig(
             interval=self.interval_minutes,
             strategy_type=strategy_type,
-            window=self.FIXED_WINDOW_SIZE
+            window=self.WINDOW_SIZE
         )
         self.strategies[strategy_type] = config
 
@@ -133,7 +131,7 @@ class PriceHandler:
             klines = await self.client.get_klines(
                 symbol=symbol,
                 interval=self.interval_str,
-                limit=self.FIXED_WINDOW_SIZE
+                limit=self.WINDOW_SIZE
             )
 
             # Initialize deque with fixed window size
@@ -146,7 +144,7 @@ class PriceHandler:
                 close=k["close"],
                 volume=k["volume"],
                 turnover=k["turnover"]
-            ) for k in klines], maxlen=self.FIXED_WINDOW_SIZE)
+            ) for k in klines], maxlen=self.WINDOW_SIZE)
 
             async with self.symbols_lock:
                 self.symbols.add(symbol)
@@ -220,8 +218,8 @@ class PriceHandler:
                         index=[new_price.timestamp]
                     )
                     df = pd.concat([df, new_data])
-                    if len(df) > self.FIXED_WINDOW_SIZE:
-                        df = df.iloc[-self.FIXED_WINDOW_SIZE:]
+                    if len(df) > self.WINDOW_SIZE:
+                        df = df.iloc[-self.WINDOW_SIZE:]
                     strategy.dataframes[symbol] = df
 
             # Generate signals if we have enough data
@@ -277,11 +275,17 @@ class PriceHandler:
             aggregated_signals = self.signal_handler.aggregate_signals(self.signals)
 
             if aggregated_signals:
-                # Format message using SignalHandler
-                message = await self.signal_handler.format_discord_message(aggregated_signals)
+                # Format messages using SignalHandler
+                messages = await self.signal_handler.format_discord_message(aggregated_signals)
 
-                # Send to Discord
-                await self.message.channel.send(message)
+                # Send each message to Discord
+                for message in messages:
+                    try:
+                        await self.message.channel.send(message)
+                        # Small delay between messages to prevent rate limiting
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.error(f"Error sending Discord message: {e}")
 
         except Exception as e:
             logger.error(f"Error processing aggregated signals: {e}")
