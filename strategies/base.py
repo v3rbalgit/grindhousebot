@@ -256,12 +256,12 @@ class SignalStrategy(ABC):
         try:
             df = self.dataframes[symbol]
 
-            # Calculate main indicator
+            # Calculate indicator
             indicator_value = self.calculate_indicator(df)
             if indicator_value is None:
                 return None
 
-            # Get market analysis signal
+            # Analyze market
             return self.analyze_market(df, indicator_value)
 
         except Exception as e:

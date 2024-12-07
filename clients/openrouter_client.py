@@ -17,11 +17,10 @@ class OpenRouterClient:
         self.api_key = api_key or getenv('OPENROUTER_API_KEY', '')
         self.base_url = "https://openrouter.ai/api/v1"
 
-        # Models for different purposes
-        self.chat_model = "google/gemini-flash-1.5-8b"  # High throughput, multilingual
-        self.analysis_model = "openai/gpt-4-turbo"      # Superior analysis
+        # Model for chat
+        self.chat_model = "google/gemini-flash-1.5-8b"
 
-        # System prompts
+        # System prompt
         self.chat_prompt = """You are GrindhouseBot's AI assistant, focused on cryptocurrency trading and technical analysis.
 
 Bot Commands and Usage:
@@ -33,8 +32,6 @@ Bot Commands and Usage:
      * MACD: Enhanced crossover detection
      * Bollinger Bands: Squeeze detection
      * Ichimoku Cloud: Crypto-optimized (20/60/120/30)
-     * Harmonic Patterns: Multiple pattern types
-     * Volume Profile: Support/resistance levels
 
 2. !unlisten [strategy] - Stop monitoring
    - Stop specific strategy: !unlisten rsi
@@ -62,8 +59,6 @@ Strategy Details:
 - MACD Strategy: Enhanced crossovers with trend confirmation, needs 27 candles
 - Bollinger Bands: Detects squeezes and breakouts, needs 20 candles
 - Ichimoku Cloud: Optimized for crypto with 20/60/120/30 settings, needs 120 candles
-- Harmonic Patterns: Finds Gartley, Butterfly, Bat, Crab patterns, needs 30 candles
-- Volume Profile: Analyzes volume distribution, needs 50 candles
 
 Signal Generation:
 - Each strategy uses multiple confirmations:
@@ -86,31 +81,7 @@ When explaining commands:
 - Mention required parameters
 - Explain expected outcomes
 - Note any prerequisites
-
-Always include a disclaimer for any market-related responses."""
-
-        # Trading analysis system prompt
-        self.analysis_prompt = """You are a professional crypto trading analyst. Your task is to analyze trading signals and provide clear, actionable insights. Focus on:
-
-1. Key technical indicators and what they suggest
-2. Important price levels to watch (support, resistance, targets)
-3. Market context and potential catalysts
-4. Clear entry, stop loss, and take profit levels
-5. Risk assessment and position sizing suggestions
-
-Your analysis should be:
-- Precise and data-driven
-- Based on multiple confirmations
-- Clear and actionable
-- Under 150 words
-
-Include:
-- Specific price targets
-- Risk/reward ratios
-- Confidence levels
-- Key risks to watch
-
-End with a brief risk disclaimer."""
+"""
 
     async def _make_request(self,
                           messages: list,
@@ -187,27 +158,6 @@ End with a brief risk disclaimer."""
             raise Exception("Failed to get chat response")
 
         return response
-
-    async def generate_text(self, prompt: str) -> Optional[str]:
-        """
-        Generate trading analysis text using OpenRouter API with the analysis model.
-
-        Args:
-            prompt: Analysis prompt with trading signal details
-
-        Returns:
-            Generated analysis text, or None if generation fails
-        """
-        messages = [
-            {"role": "system", "content": self.analysis_prompt},
-            {"role": "user", "content": prompt}
-        ]
-
-        return await self._make_request(
-            messages=messages,
-            model=self.analysis_model,
-            temperature=0.3  # Lower temperature for more focused analysis
-        )
 
     async def check_models(self) -> Dict[str, Any]:
         """

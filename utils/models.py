@@ -11,8 +11,6 @@ class StrategyType(str, Enum):
     MACD = "macd"
     BOLLINGER = "bollinger"
     ICHIMOKU = "ichimoku"
-    HARMONIC = "harmonic"
-    VOLUME_PROFILE = "volume_profile"
     ALL = "all"  # Special case to enable all strategies
 
 

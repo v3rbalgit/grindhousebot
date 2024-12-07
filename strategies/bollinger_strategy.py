@@ -43,8 +43,8 @@ class BollingerStrategy(SignalStrategy):
                 logger.warning("Bollinger Bands calculation returned None or empty")
                 return None
 
-            # Verify required columns exist
-            required_columns = ['BBU_20_2.0', 'BBM_20_2.0', 'BBL_20_2.0']
+            # Verify required columns exist (using correct pandas_ta column names)
+            required_columns = ['BBL_20_2', 'BBM_20_2', 'BBU_20_2']
             if not all(col in bb.columns for col in required_columns):
                 logger.warning(f"Missing required BB columns. Available columns: {bb.columns.tolist()}")
                 return None
@@ -52,9 +52,9 @@ class BollingerStrategy(SignalStrategy):
             # Get latest values efficiently
             try:
                 current_close = float(close.iat[-1])
-                upper_band = float(bb['BBU_20_2.0'].iat[-1])
-                middle_band = float(bb['BBM_20_2.0'].iat[-1])
-                lower_band = float(bb['BBL_20_2.0'].iat[-1])
+                upper_band = float(bb['BBU_20_2'].iat[-1])
+                middle_band = float(bb['BBM_20_2'].iat[-1])
+                lower_band = float(bb['BBL_20_2'].iat[-1])
             except (IndexError, KeyError) as e:
                 logger.error(f"Error accessing BB values: {e}")
                 return None
@@ -71,9 +71,9 @@ class BollingerStrategy(SignalStrategy):
             percent_b = (current_close - lower_band) / (upper_band - lower_band)
 
             # Store BB values for pattern detection
-            df['BBU_20_2.0'] = bb['BBU_20_2.0']
-            df['BBM_20_2.0'] = bb['BBM_20_2.0']
-            df['BBL_20_2.0'] = bb['BBL_20_2.0']
+            df['BBU_20_2'] = bb['BBU_20_2']
+            df['BBM_20_2'] = bb['BBM_20_2']
+            df['BBL_20_2'] = bb['BBL_20_2']
 
             return {
                 'close': current_close,
@@ -104,9 +104,9 @@ class BollingerStrategy(SignalStrategy):
             # Get recent data efficiently
             recent_data = df.iloc[-20:]
             close = recent_data['close']
-            upper = recent_data['BBU_20_2.0']
-            lower = recent_data['BBL_20_2.0']
-            middle = recent_data['BBM_20_2.0']
+            upper = recent_data['BBU_20_2']
+            lower = recent_data['BBL_20_2']
+            middle = recent_data['BBM_20_2']
 
             # Detect BB squeeze (low volatility)
             try:
@@ -134,9 +134,9 @@ class BollingerStrategy(SignalStrategy):
                 recent_lower = lower.tail(5)
 
                 upper_touches = sum(1 for c, u in zip(recent_closes, recent_upper)
-                                if abs(c - u) / u < 0.001)
+                                if abs(float(c) - float(u)) / float(u) < 0.001)
                 lower_touches = sum(1 for c, l in zip(recent_closes, recent_lower)
-                                if abs(c - l) / l < 0.001)
+                                if abs(float(c) - float(l)) / float(l) < 0.001)
 
                 if upper_touches >= 3:
                     patterns['walking_upper'] = 0.9
@@ -184,11 +184,12 @@ class BollingerStrategy(SignalStrategy):
                 if trend > 0:  # Uptrend confirmation
                     confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'squeeze' in bb_patterns:
-                        confidence += bb_patterns['squeeze'] * 0.2
-                    if 'lower_touch' in bb_patterns:
-                        confidence += bb_patterns['lower_touch'] * 0.2
+                    # Add pattern confidence efficiently
+                    for pattern, value in bb_patterns.items():
+                        if pattern in ('squeeze', 'lower_touch'):
+                            confidence += value * 0.2
+
+                    # Add general pattern confidence
                     if 'double_bottom' in patterns:
                         confidence += patterns['double_bottom'] * 0.2
 
@@ -209,13 +210,10 @@ class BollingerStrategy(SignalStrategy):
                 if trend < 0:  # Downtrend confirmation
                     confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
 
-                    # Add pattern confidence
-                    if 'squeeze' in bb_patterns:
-                        confidence += bb_patterns['squeeze'] * 0.2
-                    if 'upper_touch' in bb_patterns:
-                        confidence += bb_patterns['upper_touch'] * 0.2
-                    if 'walking_upper' in bb_patterns:
-                        confidence += bb_patterns['walking_upper'] * 0.2
+                    # Add pattern confidence efficiently
+                    for pattern, value in bb_patterns.items():
+                        if pattern in ('squeeze', 'upper_touch', 'walking_upper'):
+                            confidence += value * 0.2
 
                     # Volume confirmation
                     if volume_confirmed:
