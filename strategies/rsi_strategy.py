@@ -1,21 +1,13 @@
 import pandas as pd
 import pandas_ta as ta
-from typing import Optional
+from typing import Optional, Tuple
 from .base import SignalStrategy
 from utils.models import Signal, SignalType
 from utils.logger import logger
 
 
 class RSIStrategy(SignalStrategy):
-    """
-    RSI-based signal generation strategy with dynamic thresholds.
-
-    Features:
-    - Dynamic RSI thresholds based on market volatility
-    - Trend confirmation using EMA crossovers
-    - Pattern recognition for stronger signals
-    - Volume analysis for confirmation
-    """
+    """RSI-based signal generation strategy."""
 
     def __init__(self, interval: int = 60, window: int = 100) -> None:
         """
@@ -30,98 +22,123 @@ class RSIStrategy(SignalStrategy):
     @property
     def min_candles(self) -> int:
         """Minimum candles needed for RSI calculation."""
-        return 50  # Need enough data for EMAs (50) and RSI (14)
+        return 15  # 14 for RSI + 1 for current candle
 
-    def calculate_indicator(self, df: pd.DataFrame) -> Optional[float]:
-        """Calculate RSI value with additional trend indicators."""
+    def calculate_indicator(self, df: pd.DataFrame) -> Optional[Tuple[float, float]]:
+        """
+        Calculate RSI value and its rate of change.
+
+        Returns:
+            Tuple of (Current RSI, Previous RSI) if successful, None otherwise
+        """
         try:
             # Calculate RSI efficiently
             close = df['close']
             rsi = ta.rsi(close, length=14)
-            if rsi is None or rsi.empty:
+            if rsi is None or rsi.empty or len(rsi) < 2:
                 return None
 
-            # Use iat for efficient single value access
-            return float(rsi.iat[-1])
+            # Get current and previous RSI values
+            current_rsi = float(rsi.iat[-1])
+            prev_rsi = float(rsi.iat[-2])
+
+            return current_rsi, prev_rsi
 
         except Exception as e:
             logger.error(f"Error calculating RSI: {e}")
             return None
 
-    def analyze_market(self, df: pd.DataFrame, rsi_value: float) -> Optional[Signal]:
+    def analyze_market(self, rsi_values: Tuple[float, float]) -> Optional[Signal]:
         """
-        Analyze market conditions using RSI and additional indicators.
+        Generate signal based on RSI value with improved confidence scoring.
 
         Args:
-            df: Price DataFrame
-            rsi_value: Current RSI value
+            rsi_values: Tuple of (Current RSI, Previous RSI)
 
         Returns:
             Signal if conditions are met, None otherwise
         """
         try:
-            # Get dynamic thresholds based on market conditions
-            lower_threshold, upper_threshold = self.calculate_dynamic_thresholds(df)
+            current_rsi, prev_rsi = rsi_values
 
-            # Calculate market trend (only if we have enough data)
-            trend = self.calculate_market_trend(df) if len(df) >= 50 else 0
+            # Calculate RSI momentum (rate of change)
+            rsi_momentum = current_rsi - prev_rsi
 
-            # Detect patterns
-            patterns = self.detect_patterns(df)
+            # Check for oversold conditions (RSI < 30)
+            if current_rsi < 30:
+                # Base confidence from RSI level
+                # More oversold = higher confidence
+                # 30 -> 0.0, 20 -> 0.5, 10 -> 1.0
+                base_confidence = min((30 - current_rsi) / 20, 1.0)
 
-            # Volume confirmation (optimized)
-            volume = df['volume']
-            volume_ma = volume.rolling(window=20).mean()
-            volume_confirmed = volume.iat[-1] > volume_ma.iat[-1]
+                # Momentum factor
+                # Stronger downward momentum reduces confidence (might go lower)
+                # Slowing momentum or reversal increases confidence
+                momentum_factor = 1.0
+                if rsi_momentum < 0:  # Still falling
+                    momentum_factor = max(1.0 + (rsi_momentum / 10), 0.5)  # Cap reduction at 50%
+                else:  # Starting to rise
+                    momentum_factor = min(1.0 + (rsi_momentum / 20), 1.2)  # Cap increase at 20%
 
-            # Generate signals with multiple confirmations
-            signal = None
+                # Extreme oversold bonus (RSI < 20)
+                extreme_factor = 1.0
+                if current_rsi < 20:
+                    extreme_factor = 1.1  # 10% bonus for extreme oversold
 
-            if rsi_value < lower_threshold:
-                # Potential buy signal
-                if trend >= 0:  # Uptrend or neutral confirmation
-                    confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
+                # Combine factors with weights
+                final_confidence = min(
+                    base_confidence * 0.6 +          # RSI level (60%)
+                    (momentum_factor * 0.4),         # Momentum (40%)
+                    1.0
+                ) * extreme_factor                   # Apply extreme bonus
 
-                    # Add pattern confidence
-                    if 'double_bottom' in patterns:
-                        confidence += patterns['double_bottom'] * 0.2
-                    if 'breakout' in patterns:
-                        confidence += patterns['breakout'] * 0.2
+                signal = Signal(
+                    'rsi',
+                    SignalType.BUY,
+                    current_rsi,
+                    final_confidence
+                )
+                logger.info(f"Buy signal generated with RSI {current_rsi:.1f} (confidence: {final_confidence:.2f})")
+                return signal
 
-                    # Volume confirmation
-                    if volume_confirmed:
-                        confidence += 0.1
+            # Check for overbought conditions (RSI > 70)
+            elif current_rsi > 70:
+                # Base confidence from RSI level
+                # More overbought = higher confidence
+                # 70 -> 0.0, 80 -> 0.5, 90 -> 1.0
+                base_confidence = min((current_rsi - 70) / 20, 1.0)
 
-                    if confidence > 0.7:  # High confidence threshold
-                        signal = Signal(
-                            'rsi',
-                            SignalType.BUY,
-                            rsi_value
-                        )
-                        logger.info(f"Buy signal generated with confidence {confidence:.2f}")
+                # Momentum factor
+                # Stronger upward momentum reduces confidence (might go higher)
+                # Slowing momentum or reversal increases confidence
+                momentum_factor = 1.0
+                if rsi_momentum > 0:  # Still rising
+                    momentum_factor = max(1.0 - (rsi_momentum / 10), 0.5)  # Cap reduction at 50%
+                else:  # Starting to fall
+                    momentum_factor = min(1.0 - (rsi_momentum / 20), 1.2)  # Cap increase at 20%
 
-            elif rsi_value > upper_threshold:
-                # Potential sell signal
-                if trend <= 0:  # Downtrend or neutral confirmation
-                    confidence = 0.5 + (abs(trend) * 0.3)  # Base confidence + trend strength
+                # Extreme overbought bonus (RSI > 80)
+                extreme_factor = 1.0
+                if current_rsi > 80:
+                    extreme_factor = 1.1  # 10% bonus for extreme overbought
 
-                    # Add pattern confidence
-                    if 'volume_spike' in patterns:
-                        confidence += patterns['volume_spike'] * 0.2
+                # Combine factors with weights
+                final_confidence = min(
+                    base_confidence * 0.6 +          # RSI level (60%)
+                    (momentum_factor * 0.4),         # Momentum (40%)
+                    1.0
+                ) * extreme_factor                   # Apply extreme bonus
 
-                    # Volume confirmation
-                    if volume_confirmed:
-                        confidence += 0.1
+                signal = Signal(
+                    'rsi',
+                    SignalType.SELL,
+                    current_rsi,
+                    final_confidence
+                )
+                logger.info(f"Sell signal generated with RSI {current_rsi:.1f} (confidence: {final_confidence:.2f})")
+                return signal
 
-                    if confidence > 0.7:  # High confidence threshold
-                        signal = Signal(
-                            'rsi',
-                            SignalType.SELL,
-                            rsi_value
-                        )
-                        logger.info(f"Sell signal generated with confidence {confidence:.2f}")
-
-            return signal
+            return None
 
         except Exception as e:
             logger.error(f"Error analyzing market: {e}")

@@ -25,15 +25,15 @@ class CommandHandler:
         self.chat_client = OpenRouterClient()  # Used for chat functionality
         self.current_interval = DEFAULT_INTERVAL
 
-    async def handle_interval(self, message: Message, args: str) -> None:
+    async def handle_interval(self, message: Message, interval: str) -> None:
         """
         Handle interval command.
 
         Args:
             message: Discord message
-            args: New interval value
+            interval: New interval value
         """
-        if not args:
+        if not interval:
             # Show current interval and available options
             valid_intervals = ', '.join(sorted(VALID_INTERVALS, key=lambda x: int(x) if x.isdigit() else float('inf')))
             await message.channel.send(
@@ -45,7 +45,7 @@ class CommandHandler:
 
         try:
             # Validate new interval
-            new_interval = validate_interval(args)
+            new_interval = validate_interval(interval)
             if new_interval == self.current_interval:
                 await message.channel.send("🔄 Already using this interval")
                 return
@@ -159,7 +159,7 @@ class CommandHandler:
             # Delete thinking message and send response
             await thinking.delete()
             await message.channel.send(formatted_response)
-            logger.info(f"Processed chat question: {question[:50]}")
+            logger.info(f"Processed chat question: {question}")
 
         except Exception as e:
             logger.error(f"Failed to process chat: {str(e)}", exc_info=True)
@@ -174,7 +174,13 @@ class CommandHandler:
             args: Command arguments
         """
         if not args:
-            await message.channel.send("⚠️ **MISSING STRATEGY** ⚠️\nUse comma-separated values or 'all' for all strategies")
+            if not self.price_handler or not self.price_handler.active_strategies:
+                await message.channel.send("⚠️ **MISSING STRATEGY** ⚠️\nUse comma-separated values or 'all' for all strategies")
+            else:
+                # Show currently active strategies
+                active = [s.value for s in self.price_handler.active_strategies]
+                active_str = ', '.join(active).upper()
+                await message.channel.send(f"📊 **Currently Listening To**: {active_str}")
             return
 
         try:
@@ -210,7 +216,7 @@ class CommandHandler:
             args: Command arguments
         """
         if not args:
-            await message.channel.send("⚠️ **MISSING ARGUMENT** ⚠️")
+            await message.channel.send("⚠️ **MISSING ARGUMENT** ⚠️\nUse !top winners or !top losers")
             return
 
         if args == 'winners':
@@ -248,7 +254,7 @@ class CommandHandler:
         """
         try:
             if not self.price_handler:
-                # Initialize price handler without OpenRouter client
+                # Initialize price handler with first strategy
                 self.price_handler = PriceHandler(
                     message=message,
                     bybit_client=self.bybit_client,
@@ -271,7 +277,7 @@ class CommandHandler:
                     )
                     logger.info(f"Subscribed to {len(symbols)} symbol candles")
 
-                strategy_names = ', '.join(s.upper() for s in strategies)
+                strategy_names = ', '.join(s.value.upper() for s in strategies)
                 await message.channel.send(f'❗ **LISTENING FOR {strategy_names} SIGNALS** ❗')
             else:
                 # Add new strategies
@@ -282,7 +288,7 @@ class CommandHandler:
                         new_strategies.append(strategy)
 
                 if new_strategies:
-                    strategy_names = ', '.join(s.upper() for s in new_strategies)
+                    strategy_names = ', '.join(s.value.upper() for s in new_strategies)
                     await message.channel.send(f'❗ **LISTENING FOR {strategy_names} SIGNALS** ❗')
                 else:
                     await message.channel.send('🚫 **ALREADY LISTENING TO REQUESTED STRATEGIES** 🚫')
@@ -311,13 +317,13 @@ class CommandHandler:
             if strategy:
                 # Check if we're listening to this strategy
                 if strategy not in self.price_handler.active_strategies:
-                    await message.channel.send(f"❗ **LISTEN FOR {strategy.upper()} SIGNALS FIRST** ❗")
+                    await message.channel.send(f"❗ **LISTEN FOR {strategy.value.upper()} SIGNALS FIRST** ❗")
                     return
 
                 # Remove specific strategy
                 await self.price_handler.remove_strategy(strategy)
-                await message.channel.send(f'⚪ **STOPPED {strategy.upper()} SIGNALS** ⚪')
-                logger.info(f"Stopped {strategy.upper()} signals")
+                await message.channel.send(f'⚪ **STOPPED {strategy.value.upper()} SIGNALS** ⚪')
+                logger.info(f"Stopped {strategy.value.upper()} signals")
 
                 # If no more strategies, cleanup
                 if not self.price_handler.active_strategies:

@@ -20,7 +20,7 @@ class OpenRouterClient:
         # Model for chat
         self.chat_model = "google/gemini-flash-1.5-8b"
 
-        # System prompt
+        # System prompt for chat
         self.chat_prompt = """You are GrindhouseBot's AI assistant, focused on cryptocurrency trading and technical analysis.
 
 Bot Commands and Usage:
@@ -28,10 +28,10 @@ Bot Commands and Usage:
    - Use comma-separated values: !listen rsi,macd
    - Use 'all' for all strategies: !listen all
    - Available strategies:
-     * RSI: Dynamic thresholds, trend confirmation
-     * MACD: Enhanced crossover detection
-     * Bollinger Bands: Squeeze detection
-     * Ichimoku Cloud: Crypto-optimized (20/60/120/30)
+     * RSI: Momentum-based signals with dynamic confidence
+     * MACD: Trend-following signals with histogram analysis
+     * Bollinger: Volatility-based signals with trend context
+     * Ichimoku: Multi-factor signals with cloud dynamics
 
 2. !unlisten [strategy] - Stop monitoring
    - Stop specific strategy: !unlisten rsi
@@ -55,18 +55,47 @@ Bot Commands and Usage:
 6. !clear <count> - Clear messages
 
 Strategy Details:
-- RSI Strategy: Uses dynamic thresholds that adapt to volatility, requires 15 candles
-- MACD Strategy: Enhanced crossovers with trend confirmation, needs 27 candles
-- Bollinger Bands: Detects squeezes and breakouts, needs 20 candles
-- Ichimoku Cloud: Optimized for crypto with 20/60/120/30 settings, needs 120 candles
+- RSI Strategy:
+  * Base signals on oversold (<30) and overbought (>70)
+  * Confidence calculation:
+    - 60%: Distance from threshold
+    - 40%: Momentum (rate of change)
+    - +10% bonus for extreme levels (<20 or >80)
+  * Example: "RSI 25" shows oversold condition
 
-Signal Generation:
-- Each strategy uses multiple confirmations:
-  * Trend analysis
-  * Volume confirmation
-  * Pattern recognition
-  * Dynamic thresholds
-- Signals include confidence scores
+- MACD Strategy:
+  * Analyzes histogram patterns and divergence
+  * Confidence calculation:
+    - 50%: Divergence strength
+    - 30%: Histogram strength vs recent moves
+    - 20%: Trend consistency
+  * Example: "MACD Div 1.20%" shows strong divergence
+
+- Bollinger Strategy:
+  * Signals based on band penetration and volatility
+  * Confidence calculation:
+    - 70%: Band penetration (volatility adjusted)
+    - 30%: Distance from middle band (trend)
+  * Example: "BB 2.50%" shows significant penetration
+
+- Ichimoku Strategy:
+  * Cloud-based signals with multiple confirmations
+  * Confidence calculation:
+    - 45%: Price position vs cloud
+    - 35%: TK cross strength
+    - 20%: Cloud thickness
+  * Example: "Cloud 2.10%" shows strong cloud breakout
+
+Signal Aggregation:
+- Minimum confidence threshold: 0.3
+- Strategy weights in combined signals:
+  * RSI: 32% (strong reversal signals)
+  * Ichimoku: 27% (multiple confirmations)
+  * MACD: 23% (trend signals)
+  * Bollinger: 18% (volatility signals)
+- Agreement bonus:
+  * Up to 20% for multiple confirming signals
+  * Bonus scaled by average signal confidence
 - All signals are educational, not financial advice
 
 Keep your responses:
