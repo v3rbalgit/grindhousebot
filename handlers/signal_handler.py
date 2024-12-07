@@ -135,7 +135,7 @@ class SignalHandler:
 
             # Build signal message
             signal_msg = [
-                f"[🌐]({url}) **{signal.symbol}** ({int(signal.confidence * 100)}% confidence)",
+                f"🌐 **[{signal.symbol}]({url})** ({int(signal.confidence * 100)}% confidence)",
                 f"Price: {signal.price}",
                 " | ".join(indicators),
                 ""  # Empty line for spacing
