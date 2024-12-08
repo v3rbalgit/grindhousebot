@@ -1,7 +1,7 @@
 from discord import Message, TextChannel
 from typing import Optional, List
 
-from handlers.price_handler import PriceHandler
+from handlers.symbol_handler import SymbolHandler
 from clients import BybitClient, BybitWsClient, OpenRouterClient
 from utils.models import StrategyType
 from utils.logger import logger
@@ -21,7 +21,7 @@ class CommandHandler:
         """
         self.bybit_client = bybit_client
         self.bybit_ws_client = bybit_ws_client
-        self.price_handler: Optional[PriceHandler] = None
+        self.symbol_handler: Optional[SymbolHandler] = None
         self.chat_client = OpenRouterClient()  # Used for chat functionality
         self.current_interval = DEFAULT_INTERVAL
 
@@ -51,9 +51,9 @@ class CommandHandler:
                 return
 
             # If price handler is active, we need to reinitialize
-            if self.price_handler:
+            if self.symbol_handler:
                 # Store current strategies
-                current_strategies = self.price_handler.active_strategies
+                current_strategies = self.symbol_handler.active_strategies
 
                 # Unsubscribe from current topics if WebSocket is active
                 if self.bybit_ws_client is not None:
@@ -62,13 +62,13 @@ class CommandHandler:
                     await self.bybit_ws_client.unsubscribe(old_topics)
 
                 # Cleanup current price handler
-                await self.price_handler.cleanup()
+                await self.symbol_handler.cleanup()
 
                 # Update interval
                 self.current_interval = new_interval
 
                 # Initialize new price handler with updated interval
-                self.price_handler = PriceHandler(
+                self.symbol_handler = SymbolHandler(
                     message=message,
                     bybit_client=self.bybit_client,
                     interval=new_interval
@@ -76,15 +76,15 @@ class CommandHandler:
 
                 # Re-add strategies
                 for strategy in current_strategies:
-                    await self.price_handler.add_strategy(strategy)
+                    await self.symbol_handler.add_strategy(strategy)
 
                 # Initialize with new interval
-                await self.price_handler.initialize()
+                await self.symbol_handler.initialize()
 
                 # Subscribe to new topics if WebSocket is active
                 if self.bybit_ws_client is not None:
                     new_topics = [f'kline.{new_interval}.{symbol}' for symbol in symbols]
-                    await self.bybit_ws_client.subscribe(new_topics, self.price_handler)
+                    await self.bybit_ws_client.subscribe(new_topics, self.symbol_handler)
 
                 await message.channel.send(f"✅ Interval updated to {new_interval}")
                 logger.info(f"Updated interval to {new_interval}")
@@ -174,11 +174,11 @@ class CommandHandler:
             args: Command arguments
         """
         if not args:
-            if not self.price_handler or not self.price_handler.active_strategies:
+            if not self.symbol_handler or not self.symbol_handler.active_strategies:
                 await message.channel.send("⚠️ **MISSING STRATEGY** ⚠️\nUse comma-separated values or 'all' for all strategies")
             else:
                 # Show currently active strategies
-                active = [s.value for s in self.price_handler.active_strategies]
+                active = [s.value for s in self.symbol_handler.active_strategies]
                 active_str = ', '.join(active).upper()
                 await message.channel.send(f"📊 **Currently Listening To**: {active_str}")
             return
@@ -253,9 +253,9 @@ class CommandHandler:
             strategies: List of strategies to listen for
         """
         try:
-            if not self.price_handler:
+            if not self.symbol_handler:
                 # Initialize price handler with first strategy
-                self.price_handler = PriceHandler(
+                self.symbol_handler = SymbolHandler(
                     message=message,
                     bybit_client=self.bybit_client,
                     interval=self.current_interval
@@ -263,9 +263,9 @@ class CommandHandler:
 
                 # Add all strategies
                 for strategy in strategies:
-                    await self.price_handler.add_strategy(strategy)
+                    await self.symbol_handler.add_strategy(strategy)
 
-                await self.price_handler.initialize()
+                await self.symbol_handler.initialize()
                 logger.info("Initialized price handler")
 
                 # Subscribe to WebSocket updates if needed
@@ -273,7 +273,7 @@ class CommandHandler:
                     symbols = await self.bybit_client.get_usdt_instruments()
                     await self.bybit_ws_client.subscribe(
                         [f'kline.{self.current_interval}.{symbol}' for symbol in symbols],
-                        self.price_handler
+                        self.symbol_handler
                     )
                     logger.info(f"Subscribed to {len(symbols)} symbol candles")
 
@@ -283,8 +283,8 @@ class CommandHandler:
                 # Add new strategies
                 new_strategies = []
                 for strategy in strategies:
-                    if strategy not in self.price_handler.active_strategies:
-                        await self.price_handler.add_strategy(strategy)
+                    if strategy not in self.symbol_handler.active_strategies:
+                        await self.symbol_handler.add_strategy(strategy)
                         new_strategies.append(strategy)
 
                 if new_strategies:
@@ -295,9 +295,9 @@ class CommandHandler:
 
         except Exception as e:
             logger.error("Failed to start signal listener", exc_info=True)
-            if self.price_handler and not self.price_handler.active_strategies:
-                await self.price_handler.cleanup()
-                self.price_handler = None
+            if self.symbol_handler and not self.symbol_handler.active_strategies:
+                await self.symbol_handler.cleanup()
+                self.symbol_handler = None
             await message.channel.send('⚠️ **FAILED TO START LISTENING** ⚠️')
 
     async def _stop_signal_listener(self, message: Message, strategy: Optional[StrategyType] = None) -> None:
@@ -308,7 +308,7 @@ class CommandHandler:
             message: Discord message
             strategy: Strategy to stop listening to, or None to stop all
         """
-        if not self.price_handler:
+        if not self.symbol_handler:
             await message.channel.send("❗ **LISTEN FOR SIGNALS FIRST** ❗")
             return
 
@@ -316,34 +316,34 @@ class CommandHandler:
             # If specific strategy requested
             if strategy:
                 # Check if we're listening to this strategy
-                if strategy not in self.price_handler.active_strategies:
+                if strategy not in self.symbol_handler.active_strategies:
                     await message.channel.send(f"❗ **LISTEN FOR {strategy.value.upper()} SIGNALS FIRST** ❗")
                     return
 
                 # Remove specific strategy
-                await self.price_handler.remove_strategy(strategy)
+                await self.symbol_handler.remove_strategy(strategy)
                 await message.channel.send(f'⚪ **STOPPED {strategy.value.upper()} SIGNALS** ⚪')
                 logger.info(f"Stopped {strategy.value.upper()} signals")
 
                 # If no more strategies, cleanup
-                if not self.price_handler.active_strategies:
+                if not self.symbol_handler.active_strategies:
                     if self.bybit_ws_client is not None:
                         symbols = await self.bybit_client.get_usdt_instruments()
                         await self.bybit_ws_client.unsubscribe(
                             [f'kline.{self.current_interval}.{symbol}' for symbol in symbols]
                         )
-                    await self.price_handler.cleanup()
-                    self.price_handler = None
+                    await self.symbol_handler.cleanup()
+                    self.symbol_handler = None
             else:
                 # Stop all strategies
-                await self.price_handler.remove_strategy(None)
+                await self.symbol_handler.remove_strategy(None)
                 if self.bybit_ws_client is not None:
                     symbols = await self.bybit_client.get_usdt_instruments()
                     await self.bybit_ws_client.unsubscribe(
                         [f'kline.{self.current_interval}.{symbol}' for symbol in symbols]
                     )
-                await self.price_handler.cleanup()
-                self.price_handler = None
+                await self.symbol_handler.cleanup()
+                self.symbol_handler = None
                 await message.channel.send('⚪ **STOPPED ALL SIGNALS** ⚪')
                 logger.info("Stopped all signal listening")
 

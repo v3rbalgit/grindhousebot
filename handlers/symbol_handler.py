@@ -1,6 +1,6 @@
 import pandas as pd
 import asyncio
-from typing import Dict, List, Set, Optional
+from typing import Dict, Set, Optional
 from discord import Message
 from collections import deque
 from utils.models import PriceData, SignalData, SignalConfig, StrategyType, SignalType
@@ -11,9 +11,9 @@ from utils.logger import logger
 from utils.constants import DEFAULT_INTERVAL, validate_interval, interval_to_minutes
 
 
-class PriceHandler:
+class SymbolHandler:
     """
-    Handles price data processing and signal generation.
+    Handles symbol processing, price data and signal generation.
     """
 
     # Increased window size to provide buffer for Ichimoku calculations
@@ -24,7 +24,7 @@ class PriceHandler:
                  bybit_client: BybitClient,
                  interval: Optional[str] = None) -> None:
         """
-        Initialize the price handler.
+        Initialize the symbol handler.
 
         Args:
         message: Discord message for sending responses

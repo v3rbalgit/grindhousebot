@@ -271,7 +271,7 @@ The bot uses two specialized AI models:
 
 - **Main Bot (`main.py`)**: Handles Discord interactions and command processing
 - **Command Handler (`command_handler.py`)**: Manages command parsing and execution
-- **Price Handler (`price_handler.py`)**: Manages real-time price data and signal generation
+- **Symbol Handler (`symbol_handler.py`)**: Manages real-time price data and signal generation for each symbol
 - **Strategy Factory (`factory.py`)**: Creates and manages trading strategy instances
 - **Base Strategy (`base.py`)**: Provides common interface and functionality for all strategies
 - **WebSocket Client (`bybit_ws.py`)**: Maintains real-time connection with Bybit exchange
