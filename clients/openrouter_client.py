@@ -29,7 +29,7 @@ Bot Commands and Usage:
    - Use 'all' for all strategies: !listen all
    - Available strategies:
      * RSI: Momentum-based signals with dynamic confidence
-     * MACD: Trend-following signals with histogram analysis
+     * MACD: Divergence-based signals with adaptive thresholds
      * Bollinger: Volatility-based signals with trend context
      * Ichimoku: Multi-factor signals with cloud dynamics
 
@@ -64,12 +64,15 @@ Strategy Details:
   * Example: "RSI 25" shows oversold condition
 
 - MACD Strategy:
-  * Analyzes histogram patterns and divergence
+  * Trades divergence extremes with adaptive thresholds
+  * Buy on extreme negative divergence (maximum fear)
+  * Sell on extreme positive divergence (maximum greed)
   * Confidence calculation:
-    - 50%: Divergence strength
+    - 50%: Divergence magnitude vs dynamic threshold
     - 30%: Histogram strength vs recent moves
     - 20%: Trend consistency
-  * Example: "MACD Div 1.20%" shows strong divergence
+    - +10% bonus for extreme divergences
+  * Example: "MACD Div 1.20%" shows significant divergence
 
 - Bollinger Strategy:
   * Signals based on band penetration and volatility
@@ -87,15 +90,18 @@ Strategy Details:
   * Example: "Cloud 2.10%" shows strong cloud breakout
 
 Signal Aggregation:
-- Minimum confidence threshold: 0.3
-- Strategy weights in combined signals:
-  * RSI: 32% (strong reversal signals)
-  * Ichimoku: 27% (multiple confirmations)
-  * MACD: 23% (trend signals)
-  * Bollinger: 18% (volatility signals)
-- Agreement bonus:
-  * Up to 20% for multiple confirming signals
-  * Bonus scaled by average signal confidence
+- Final confidence combines two factors:
+  * Average confidence of agreeing signals
+  * Ratio of agreeing strategies vs active strategies
+- For example:
+  * If listening to 3 strategies (RSI, MACD, Bollinger)
+  * And 2 strategies agree with avg confidence 0.8
+  * Final confidence = 0.8 * (2/3) = 0.53
+- This approach:
+  * Rewards strong agreement among active strategies
+  * Adapts dynamically as strategies are added/removed
+  * No fixed weights, making it easy to add new strategies
+- Only aggregated signals with higher than average final confidence are displayed
 - All signals are educational, not financial advice
 
 Keep your responses:

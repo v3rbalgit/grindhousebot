@@ -26,10 +26,11 @@ A powerful Discord bot for cryptocurrency trading signals and real-time market m
 - RSI > 70: Sell signal (stronger as RSI increases)
 
 ### MACD Strategy
-- Divergence-based signals
-- Uses 5-period average divergence
-- Crossover confirmation required
-- Confidence based on divergence strength
+- Trades divergence extremes with adaptive thresholds
+- Buy signals on significant negative divergence (maximum fear)
+- Sell signals on significant positive divergence (maximum greed)
+- Dynamic threshold calculation using median absolute deviation
+- Automatically adapts to different timeframes and market conditions
 
 ### Bollinger Bands Strategy
 - Band penetration signals
@@ -49,11 +50,8 @@ A powerful Discord bot for cryptocurrency trading signals and real-time market m
 
 Signals combine multiple factors:
 1. Individual strategy confidence (0.0-1.0)
-2. Strategy weights:
-   - RSI: 32% (strong reversal signals)
-   - Ichimoku: 27% (multiple confirmations)
-   - MACD: 23% (trend signals)
-   - Bollinger: 18% (volatility signals)
+2. Strategy agreement ratio
+3. Dynamic aggregation based on active strategies
 
 ### Strategy-Specific Confidence Scoring
 
@@ -72,10 +70,16 @@ Each strategy uses optimized confidence calculations:
 - Weighted scoring: 60% RSI level + 40% momentum, with up to 10% extreme bonus
 
 #### MACD
-- Base confidence from divergence strength
-- Considers histogram strength vs recent movements
+- Base confidence from divergence magnitude vs dynamic threshold
+- Considers histogram strength relative to recent movements
 - Includes trend consistency factor
-- Weighted scoring: 50% divergence + 30% histogram strength + 20% trend consistency
+- Weighted scoring:
+  * 50% divergence magnitude
+  * 30% histogram strength
+  * 20% trend consistency
+  * +10% bonus for extreme divergences
+- Uses median absolute deviation for adaptive thresholds
+- Minimum sensitivity threshold to prevent noise
 
 #### Ichimoku
 - Measures cloud and TK cross relative to recent price range
@@ -84,23 +88,26 @@ Each strategy uses optimized confidence calculations:
 
 ### Signal Aggregation
 
-The signal handler implements several optimizations for efficient signal processing:
+The signal handler implements an adaptive approach for combining signals:
 
-1. Minimum Confidence Threshold
-   - Signals below 0.3 confidence are filtered out
-   - Reduces noise and improves signal quality
+1. Dynamic Confidence Calculation
+   - Final confidence combines two key factors:
+     * Average confidence of agreeing signals
+     * Ratio of agreeing strategies vs active strategies
+   - Example:
+     * If listening to 3 strategies (RSI, MACD, Bollinger)
+     * And 2 strategies agree with average confidence 0.8
+     * Final confidence = 0.8 * (2/3) = 0.53
 
-2. Agreement Bonus
-   - Up to 20% bonus for multiple confirming signals
-   - Bonus scaled by average confidence of agreeing signals
-   - Rewards strong consensus across strategies
+2. Advantages of This Approach
+   - Adapts automatically as strategies are added/removed
+   - No fixed weights, making it easy to add new strategies
+   - Higher confidence when more active strategies agree
+   - Naturally scales with the number of strategies in use
 
-3. Dynamic Weight Adjustment
-   - Base weights adjusted based on signal strength
-   - Normalized to maintain consistent scaling
-   - Prioritizes strongest signals in current conditions
-
-[Rest of the README content remains the same...]
+3. Signal filtering
+   - Only aggregated signals higher than average confidence score are displayed
+   - Displays only useful aggregated signals
 
 ## Performance Optimizations 🚀
 
@@ -122,7 +129,19 @@ The signal handler implements several optimizations for efficient signal process
 - Minimal data copying in signal processing
 - Optimized message batching for Discord
 
-## Installation 🚀
+## Installation 🔧
+
+### Prerequisites
+
+1. Create a Discord bot using the [Discord Developer Portal](https://discord.com/developers/applications)
+   - Enable "Message Content Intent" in the bot settings
+   - Generate a bot token
+   - Add the bot to your server with necessary permissions
+
+2. Get an OpenRouter API key from [OpenRouter](https://openrouter.ai/)
+   - Sign up for an account
+   - Generate an API key
+   - Add the key to your .env file
 
 ### Standard Installation
 1. Clone the repository
@@ -149,25 +168,6 @@ The signal handler implements several optimizations for efficient signal process
 1. Build and run using Docker Compose:
    ```bash
    docker compose up --build
-   ```
-
-## Setup 🔧
-
-1. Create a Discord bot using the [Discord Developer Portal](https://discord.com/developers/applications)
-   - Enable "Message Content Intent" in the bot settings
-   - Generate a bot token
-   - Add the bot to your server with necessary permissions
-
-2. Get an OpenRouter API key from [OpenRouter](https://openrouter.ai/)
-   - Sign up for an account
-   - Generate an API key
-   - Add the key to your .env file
-
-3. Configure environment variables in `.env`:
-   ```
-   DISCORD_BOT_TOKEN=your_discord_bot_token
-   OPENROUTER_API_KEY=your_openrouter_api_key
-   DEFAULT_INTERVAL=60
    ```
 
 ### Time Interval Configuration ⏰
@@ -246,12 +246,12 @@ The bot provides detailed, actionable trading signals:
 📈 BUY Signals
 **BTCUSDT** (0.85)
 Price: 43250
-RSI 28 | MACD Div 1.20% | BB 2.50%
+RSI 28 | MACD Div -1.20% | BB 2.50%
 
 📉 SELL Signals
 **ETHUSDT** (0.92)
 Price: 2250
-RSI 75 | Cloud 2.10% | BB 1.80%
+RSI 75 | MACD Div 1.10% | Cloud 2.10%
 ```
 
 ## AI Integration 🤖
@@ -293,7 +293,7 @@ The bot uses a factory pattern for strategy management:
 
 3. **Concrete Strategies**: Implement specific analysis methods
    - RSI with dynamic thresholds
-   - MACD with enhanced crossover detection
+   - MACD with adaptive divergence analysis
    - Bollinger Bands with squeeze detection
    - Ichimoku Cloud with crypto-optimized settings
 

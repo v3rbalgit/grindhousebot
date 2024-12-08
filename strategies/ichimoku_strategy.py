@@ -31,6 +31,14 @@ class IchimokuStrategy(SignalStrategy):
     def calculate_indicator(self, df: pd.DataFrame) -> Optional[Dict[str, float]]:
         """Calculate Ichimoku components with crypto-optimized settings."""
         try:
+            # Log data availability
+            candle_count = len(df)
+
+            if candle_count < self.min_candles:
+                logger.warning(f"Insufficient data for Ichimoku calculation. "
+                             f"Have {candle_count}, need {self.min_candles}")
+                return None
+
             # Cache DataFrame columns for efficient access
             high = df['high']
             low = df['low']
@@ -46,19 +54,23 @@ class IchimokuStrategy(SignalStrategy):
                 kijun = (high.rolling(window=self.kijun_period).max() +
                         low.rolling(window=self.kijun_period).min()) / 2
 
-                # Senkou Span A (Leading Span A)
-                senkou_a = ((tenkan + kijun) / 2).shift(self.displacement)
-
-                # Senkou Span B (Leading Span B)
-                senkou_b = ((high.rolling(window=self.senkou_period).max() +
-                           low.rolling(window=self.senkou_period).min()) / 2).shift(self.displacement)
+                # Calculate base values for Senkou spans without shift
+                base_senkou_a = (tenkan + kijun) / 2
+                base_senkou_b = (high.rolling(window=self.senkou_period).max() +
+                               low.rolling(window=self.senkou_period).min()) / 2
 
                 # Get latest values efficiently
                 current_close = float(close.iat[-1])
                 current_tenkan = float(tenkan.iat[-1])
                 current_kijun = float(kijun.iat[-1])
-                current_senkou_a = float(senkou_a.iat[-self.displacement-1])  # Current cloud
-                current_senkou_b = float(senkou_b.iat[-self.displacement-1])  # Current cloud
+
+                # Get current cloud values by looking back displacement periods
+                try:
+                    current_senkou_a = float(base_senkou_a.iat[-self.displacement])
+                    current_senkou_b = float(base_senkou_b.iat[-self.displacement])
+                except IndexError as e:
+                    logger.error(f"Failed to get cloud values at displacement {self.displacement}: {e}")
+                    return None
 
                 # Calculate recent price volatility for context
                 recent_highs = high.tail(self.tenkan_period)
@@ -106,23 +118,16 @@ class IchimokuStrategy(SignalStrategy):
 
             # Calculate TK cross strength relative to recent price range
             tk_distance = abs(current_tenkan - current_kijun) / current_close
-            relative_tk_strength = min(tk_distance / (price_range * 0.3), 1.0)  # Expect TK distance to be ~30% of range
+            relative_tk_strength = min(tk_distance / (price_range * 0.3), 1.0)
 
             # Check for potential buy signal
             if (current_close > cloud_top and  # Price above cloud
                 current_tenkan > current_kijun):  # TK cross is bullish
 
-                # 1. Price position relative to cloud (45% weight)
-                # More distance above cloud = higher confidence
+                # Calculate confidence components
                 cloud_distance = (current_close - cloud_top) / current_close
-                cloud_conf = min(cloud_distance / (price_range * 0.2), 1.0)  # Expect distance ~20% of range
-
-                # 2. TK cross strength (35% weight)
-                # Stronger cross relative to volatility = higher confidence
+                cloud_conf = min(cloud_distance / (price_range * 0.2), 1.0)
                 tk_conf = relative_tk_strength
-
-                # 3. Cloud strength (20% weight)
-                # Thicker cloud relative to volatility = higher confidence
                 cloud_strength = relative_thickness
 
                 # Final confidence calculation
@@ -146,14 +151,10 @@ class IchimokuStrategy(SignalStrategy):
             elif (current_close < cloud_bottom and  # Price below cloud
                   current_tenkan < current_kijun):  # TK cross is bearish
 
-                # 1. Price position relative to cloud (45% weight)
+                # Calculate confidence components
                 cloud_distance = (cloud_bottom - current_close) / current_close
-                cloud_conf = min(cloud_distance / (price_range * 0.2), 1.0)  # Expect distance ~20% of range
-
-                # 2. TK cross strength (35% weight)
+                cloud_conf = min(cloud_distance / (price_range * 0.2), 1.0)
                 tk_conf = relative_tk_strength
-
-                # 3. Cloud strength (20% weight)
                 cloud_strength = relative_thickness
 
                 # Final confidence calculation

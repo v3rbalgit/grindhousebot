@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from dataclasses import dataclass
 import numpy as np
 from utils.models import SignalData, SignalType, StrategyType
@@ -19,17 +19,8 @@ class SignalHandler:
     """Handles aggregation and analysis of trading signals."""
 
     # Discord message limit
-    DISCORD_CHAR_LIMIT = 2000
+    DISCORD_CHAR_LIMIT = 4000
     MAX_SIGNALS_PER_MESSAGE = 10
-    MIN_SIGNAL_CONFIDENCE = 0.3
-
-    # Strategy weights lookup table
-    STRATEGY_WEIGHTS = {
-        StrategyType.RSI: 0.32,       # Strong reversal signals
-        StrategyType.ICHIMOKU: 0.27,  # Multiple confirmations
-        StrategyType.MACD: 0.23,      # Good trend change signals
-        StrategyType.BOLLINGER: 0.18  # Volatility-based signals
-    }
 
     # Signal value description templates
     SIGNAL_TEMPLATES = {
@@ -39,11 +30,6 @@ class SignalHandler:
         StrategyType.ICHIMOKU: "Cloud {:.2%}"
     }
 
-    def __init__(self):
-        """Initialize the signal handler."""
-        # Pre-calculate total weight for normalization
-        self.total_weight = sum(self.STRATEGY_WEIGHTS.values())
-
     def _describe_signal_value(self, signal: SignalData) -> str:
         """Generate a descriptive explanation of the signal value."""
         template = self.SIGNAL_TEMPLATES.get(signal.strategy)
@@ -51,72 +37,95 @@ class SignalHandler:
             return template.format(float(signal.value))
         return str(signal.value)
 
-    def aggregate_signals(self, signals: Dict[str, Dict[StrategyType, SignalData]]) -> List[AggregatedSignal]:
+    def aggregate_signals(self, signals: Dict[str, Dict[StrategyType, SignalData]], active_strategies: Set[StrategyType]) -> List[AggregatedSignal]:
         """
         Aggregate signals across all strategies and calculate combined confidence.
 
         Args:
             signals: Dictionary of signals by symbol and strategy
+            active_strategies: Set of strategies currently being listened to
 
         Returns:
             List of aggregated signals, sorted by confidence
         """
-        aggregated_signals = []
+        # Early return for empty inputs to avoid unnecessary processing
+        if not signals or not active_strategies:
+            return []
+
+        aggregated_signals: List[AggregatedSignal] = []
+        # Pre-calculate active strategy count to avoid repeated len() calls
+        active_strat_count = len(active_strategies)
 
         for symbol, strategy_signals in signals.items():
             if not strategy_signals:
                 continue
 
-            # Filter and group signals by type
-            buy_signals = []
-            sell_signals = []
+            # Group signals by type using dictionary views for efficiency
+            # This avoids creating unnecessary intermediate lists
+            signal_values = strategy_signals.values()
+            signal_types = {SignalType.BUY: [], SignalType.SELL: []}
 
-            for signal in strategy_signals.values():
-                if signal.confidence >= self.MIN_SIGNAL_CONFIDENCE:
-                    if signal.signal_type == SignalType.BUY:
-                        buy_signals.append(signal)
-                    else:
-                        sell_signals.append(signal)
+            # Single pass grouping of signals by their type
+            # More efficient than multiple list comprehensions
+            for signal in signal_values:
+                signal_types[signal.signal_type].append(signal)
 
-            # Process buy and sell signals
-            for signal_group in (buy_signals, sell_signals):
+            # Process non-empty signal groups
+            # We only create aggregated signals for groups that have signals
+            for signal_type, signal_group in signal_types.items():
                 if signal_group:
-                    signal_type = signal_group[0].signal_type
-                    agg_signal = self._create_aggregated_signal(signal_group, signal_type)
+                    agg_signal = self._create_aggregated_signal(signal_group, signal_type, active_strat_count)
                     if agg_signal:
                         aggregated_signals.append(agg_signal)
 
-        # Sort by confidence once at the end
-        return sorted(aggregated_signals, key=lambda x: x.confidence, reverse=True)
+        if not aggregated_signals:
+            return []
 
-    def _create_aggregated_signal(self, signals: List[SignalData], signal_type: SignalType) -> Optional[AggregatedSignal]:
+        # Use numpy for efficient calculations of confidence scores
+        # This is faster than Python's built-in functions for numerical operations
+        confidences = np.fromiter((s.confidence for s in aggregated_signals), dtype=np.float64)
+        avg_confidence = np.mean(confidences)
+
+        # Filter and sort in one pass using numpy
+        # This is more efficient than doing separate filter and sort operations
+        # We only keep signals with above-average confidence
+        mask = confidences >= avg_confidence
+        filtered_signals = [s for i, s in enumerate(aggregated_signals) if mask[i]]
+
+        # Sort by confidence in descending order
+        return sorted(filtered_signals, key=lambda x: x.confidence, reverse=True)
+
+    def _create_aggregated_signal(self, signals: List[SignalData], signal_type: SignalType, active_strat_count: int) -> Optional[AggregatedSignal]:
         """Create an aggregated signal from a list of signals."""
         if not signals:
             return None
 
-        # Calculate weighted confidence efficiently
-        confidences = np.array([signal.confidence for signal in signals])
-        weights = np.array([self.STRATEGY_WEIGHTS.get(signal.strategy, 0.18) for signal in signals])
+        signal_count = len(signals)
 
-        # Calculate base confidence
-        weighted_confidence = np.sum(confidences * weights) / self.total_weight
+        # Calculate average confidence using numpy array operations
+        # This is more efficient than Python's built-in mean calculation
+        confidences = np.fromiter((signal.confidence for signal in signals), dtype=np.float64)
+        avg_confidence = np.mean(confidences)
 
-        # Apply agreement bonus if multiple signals
-        if len(signals) > 1:
-            # Scale bonus by average confidence
-            bonus = min((len(signals) - 1) * 0.1, 0.2) * np.mean(confidences)
-            weighted_confidence *= (1 + bonus)
+        # Calculate the ratio of agreeing strategies vs active strategies
+        # This represents how many of the strategies we're listening to are in agreement
+        # Higher ratio means more strategies agree on this signal
+        strategy_agreement_ratio = signal_count / active_strat_count
 
-        # Ensure confidence is between 0 and 1
-        final_confidence = float(min(weighted_confidence, 1.0))
+        # Combine average confidence with agreement ratio
+        # This ensures higher confidence when more of our active strategies agree
+        final_confidence = avg_confidence * strategy_agreement_ratio
 
-        # Get latest signal for timestamp and price
-        latest_signal = max(signals, key=lambda x: x.timestamp)
+        # Find the latest signal using numpy's argmax
+        # This is more efficient than using max() with a key function
+        timestamps = np.fromiter((signal.timestamp for signal in signals), dtype=np.int64)
+        latest_idx = np.argmax(timestamps)
+        latest_signal = signals[latest_idx]
 
         return AggregatedSignal(
             symbol=latest_signal.symbol,
             signal_type=signal_type,
-            confidence=final_confidence,
+            confidence=float(final_confidence),
             price=latest_signal.price,
             timestamp=latest_signal.timestamp,
             supporting_signals=signals
@@ -135,7 +144,7 @@ class SignalHandler:
 
             # Build signal message
             signal_msg = [
-                f"🌐 **[{signal.symbol}]({url})** ({int(signal.confidence * 100)}% confidence)",
+                f"**[{signal.symbol}]({url})** ({int(signal.confidence * 100)}% confidence)",
                 f"Price: {signal.price}",
                 " | ".join(indicators),
                 ""  # Empty line for spacing
@@ -158,24 +167,24 @@ class SignalHandler:
         """Format signals into Discord messages."""
         if not signals:
             return ["No significant trading signals at this time."]
+        else:
+            messages: List[str] = ["🎯 **High-Confidence Trading Signals**\n\n"]
 
-        # Take top signals up to limit and group by type
-        top_signals = signals[:self.MAX_SIGNALS_PER_MESSAGE]
-        buy_signals = [s for s in top_signals if s.signal_type == SignalType.BUY]
-        sell_signals = [s for s in top_signals if s.signal_type == SignalType.SELL]
+            # Take top signals up to limit and group by type
+            top_signals = signals[:self.MAX_SIGNALS_PER_MESSAGE]
+            buy_signals = [s for s in top_signals if s.signal_type == SignalType.BUY]
+            sell_signals = [s for s in top_signals if s.signal_type == SignalType.SELL]
 
-        messages: List[str] = []
+            if buy_signals:
+                messages.extend(self._format_signal_batch(
+                    buy_signals,
+                    "📈 **BUY Signals**"
+                ))
 
-        if buy_signals:
-            messages.extend(self._format_signal_batch(
-                buy_signals,
-                "🎯 **High-Confidence Trading Signals**\n\n📈 **BUY Signals**"
-            ))
+            if sell_signals:
+                messages.extend(self._format_signal_batch(
+                    sell_signals,
+                    "📉 **SELL Signals**"
+                ))
 
-        if sell_signals:
-            messages.extend(self._format_signal_batch(
-                sell_signals,
-                "📉 **SELL Signals**"
-            ))
-
-        return messages
+            return messages
