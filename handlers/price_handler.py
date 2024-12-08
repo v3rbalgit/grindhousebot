@@ -16,7 +16,8 @@ class PriceHandler:
     Handles price data processing and signal generation.
     """
 
-    WINDOW_SIZE = 150
+    # Increased window size to provide buffer for Ichimoku calculations
+    WINDOW_SIZE = 200  # Changed from 150 to 200 to ensure enough data
 
     def __init__(self,
                  message: Message,
@@ -58,9 +59,9 @@ class PriceHandler:
         return self.interval_str
 
     @property
-    def active_strategies(self) -> List[StrategyType]:
-        """Get list of active strategies."""
-        return list(self.strategies.keys())
+    def active_strategies(self) -> Set[StrategyType]:
+        """Get set of active strategies."""
+        return set(self.strategies.keys())
 
     async def add_strategy(self, strategy_type: StrategyType) -> None:
         """Add a new strategy to monitor."""
@@ -258,7 +259,7 @@ class PriceHandler:
                         value=signal.value,
                         timestamp=latest_price.timestamp,
                         price=latest_price.close,
-                        confidence=signal.confidence  # Include signal confidence
+                        confidence=signal.confidence
                     )
 
                     # Store signal
@@ -273,20 +274,19 @@ class PriceHandler:
         """Process and send aggregated signals."""
         try:
             # Aggregate signals using SignalHandler
-            aggregated_signals = self.signal_handler.aggregate_signals(self.signals)
+            aggregated_signals = self.signal_handler.aggregate_signals(self.signals, self.active_strategies)
 
-            if aggregated_signals:
-                # Format messages using SignalHandler
-                messages = await self.signal_handler.format_discord_message(aggregated_signals)
+            # Format messages using SignalHandler
+            messages = await self.signal_handler.format_discord_message(aggregated_signals)
 
-                # Send each message to Discord
-                for message in messages:
-                    try:
-                        await self.message.channel.send(message)
-                        # Small delay between messages to prevent rate limiting
-                        await asyncio.sleep(1)
-                    except Exception as e:
-                        logger.error(f"Error sending Discord message: {e}")
+            # Send each message to Discord
+            for message in messages:
+                try:
+                    await self.message.channel.send(message)
+                    # Small delay between messages to prevent rate limiting
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.error(f"Error sending Discord message: {e}")
 
         except Exception as e:
             logger.error(f"Error processing aggregated signals: {e}")
